@@ -1,0 +1,104 @@
+{
+  "name": "flexcraft-launcher",
+  "version": "0.1.8",
+  "private": true,
+  "description": "FlexCraft desktop launcher.",
+  "author": "FlexCraft",
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0",
+    "npm": ">=10"
+  },
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:renderer": "vite --host 127.0.0.1",
+    "dev:electron": "wait-on tcp:5174 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5174 electron .",
+    "electron": "cross-env ELECTRON_RUN_AS_NODE= electron .",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json && tsc -p electron/tsconfig.json && node scripts/write-electron-package.mjs && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "archive:source": "node scripts/create-source-archive.mjs",
+    "package:win": "npm run build && electron-builder --win nsis portable zip --x64 && node scripts/publish-downloads.mjs"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3",
+    "lucide-react": "^1.17.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tar": "^7.5.16"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "concurrently": "^10.0.3",
+    "cross-env": "^10.1.0",
+    "electron": "^40.10.3",
+    "electron-builder": "^26.15.2",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.16",
+    "wait-on": "^9.0.10"
+  },
+  "build": {
+    "appId": "ru.flexcraft.launcher",
+    "productName": "FlexCraft",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "!dist/client-mods/**",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "dist/client-mods",
+        "to": "client-mods",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "FlexCraft-Launcher-${version}-win-${arch}.${ext}"
+    },
+    "nsis": {
+      "artifactName": "FlexCraft-Installer-${version}-win-${arch}.${ext}",
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "runAfterFinish": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "FlexCraft",
+      "deleteAppDataOnUninstall": false
+    },
+    "portable": {
+      "artifactName": "FlexCraft-Launcher-${version}-portable-win-${arch}.${ext}"
+    }
+  }
+}

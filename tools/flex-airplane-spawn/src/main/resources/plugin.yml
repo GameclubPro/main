@@ -1,0 +1,6 @@
+name: FlexAirplaneSpawnInstaller
+version: 1.0.2
+main: ru.flexcraft.airplane.FlexAirplaneSpawnInstaller
+api-version: '1.21'
+load: POSTWORLD
+description: One-shot installer that rebuilds the airplane spawn without touching the ground below.

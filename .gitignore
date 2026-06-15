@@ -1,0 +1,33 @@
+/node_modules/
+/dist/
+/dist-electron/
+/dist-lean/
+/release/
+/.vite/
+/downloads/
+
+# Local packaged copies and temporary transfer archives.
+/*.tar.gz
+/*.tgz
+/*.zip
+/*.exe
+/*.blockmap
+/*.jar
+/flexcraft-source-*.zip
+
+.env
+.env.*
+!.env.example
+
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+vk codex
+vk codex.txt

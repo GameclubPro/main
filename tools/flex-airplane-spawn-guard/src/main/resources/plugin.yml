@@ -1,0 +1,67 @@
+name: FlexAirplaneSpawnGuard
+version: 1.1.2
+main: ru.flexcraft.airplane.FlexAirplaneSpawnGuard
+api-version: '1.21'
+description: Keeps the airplane spawn safe and redirects falling players to random safe places.
+commands:
+  spawn:
+    description: Teleport to the airplane spawn.
+    usage: /spawn [player]
+    aliases: [fspawn, hub, lobby]
+  rtp:
+    description: Teleport to a random safe place.
+    usage: /rtp [player]
+    aliases: [frtp, wild, randomtp]
+  heal:
+    description: Heal a player.
+    usage: /heal [player]
+    aliases: [fheal]
+  feed:
+    description: Restore a player's hunger.
+    usage: /feed [player]
+    aliases: [ffeed]
+  fly:
+    description: Toggle flight for a player.
+    usage: /fly [player]
+    aliases: [ffly, flight]
+  gm:
+    description: Change game mode.
+    usage: /gm <survival|creative|adventure|spectator> [player]
+    aliases: [fgm, gamemode]
+  day:
+    description: Set daytime in the current world.
+    usage: /day
+    aliases: [fday]
+  night:
+    description: Set night in the current world.
+    usage: /night
+    aliases: [fnight]
+  sun:
+    description: Clear weather in the current world.
+    usage: /sun
+    aliases: [fsun]
+  rain:
+    description: Start rain in the current world.
+    usage: /rain
+    aliases: [frain]
+  announce:
+    description: Broadcast a server announcement.
+    usage: /announce <message>
+    aliases: [fannounce, bc, broadcast]
+  admin67:
+    description: Admin control command for FlexCraft.
+    usage: /admin67 [help|on|off|status|spawn|rtp|heal|feed|fly|creative|survival|day|night|sun|rain|broadcast]
+    aliases: [a67, flexadmin]
+permissions:
+  flex.command.spawn:
+    description: Allows teleporting to spawn.
+    default: true
+  flex.command.rtp:
+    description: Allows random safe teleport.
+    default: true
+  flex.command.admin:
+    description: Allows server management commands.
+    default: op
+  flex.command.admin67:
+    description: Allows using the admin67 control command.
+    default: op

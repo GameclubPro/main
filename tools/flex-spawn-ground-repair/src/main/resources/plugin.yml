@@ -1,0 +1,6 @@
+name: FlexSpawnGroundRepair
+version: 1.0.0
+main: ru.flexcraft.airplane.FlexSpawnGroundRepair
+api-version: '1.21'
+load: POSTWORLD
+description: Repairs the terrain cutout under the airplane spawn.

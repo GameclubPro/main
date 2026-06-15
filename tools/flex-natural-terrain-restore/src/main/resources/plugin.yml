@@ -1,0 +1,5 @@
+name: FlexNaturalTerrainRestore
+version: 1.0.0
+main: ru.flexcraft.airplane.FlexNaturalTerrainRestore
+api-version: '1.21'
+description: Regenerates the natural terrain under the airplane spawn and rebuilds the airplane.

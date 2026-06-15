@@ -1,0 +1,56 @@
+{
+  "minecraft": "26.1.2",
+  "loader": "fabric",
+  "fabricLoader": "0.19.2",
+  "installedAt": "2026-06-12T23:05:30.446Z",
+  "mods": [
+    {
+      "slug": "fabric-api",
+      "title": "Fabric API",
+      "version": "0.151.0+26.1.2",
+      "file": "fabric-api-0.151.0+26.1.2.jar"
+    },
+    {
+      "slug": "xaeros-minimap",
+      "title": "Xaero's Minimap",
+      "version": "fabric-26.1.2-26.1.0",
+      "file": "xaerominimap-fabric-26.1.2-26.1.0.jar"
+    },
+    {
+      "slug": "xaeros-world-map",
+      "title": "Xaero's World Map",
+      "version": "fabric-26.1.2-1.41.0",
+      "file": "xaeroworldmap-fabric-26.1.2-1.41.0.jar"
+    },
+    {
+      "slug": "modmenu",
+      "title": "Mod Menu",
+      "version": "18.0.0-beta.1",
+      "file": "modmenu-18.0.0-beta.1.jar"
+    },
+    {
+      "slug": "simple-voice-chat",
+      "title": "Simple Voice Chat",
+      "version": "fabric-2.6.18+26.1.2",
+      "file": "voicechat-fabric-2.6.18+26.1.2.jar"
+    },
+    {
+      "slug": "open-parties-and-claims",
+      "title": "Open Parties and Claims",
+      "version": "fabric-26.1.2-0.27.5",
+      "file": "open-parties-and-claims-fabric-26.1.2-0.27.5.jar"
+    },
+    {
+      "slug": "forge-config-api-port",
+      "title": "Forge Config API Port",
+      "version": "26.1.5",
+      "file": "ForgeConfigAPIPort-v26.1.5-mc26.1.x-Fabric.jar"
+    },
+    {
+      "slug": "fabric-language-kotlin",
+      "title": "Fabric Language Kotlin",
+      "version": "1.13.12+kotlin.2.4.0",
+      "file": "fabric-language-kotlin-1.13.12+kotlin.2.4.0.jar"
+    }
+  ]
+}
