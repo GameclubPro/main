@@ -19,6 +19,10 @@ const LEGACY_LOCAL_SERVER_ADDRESSES = new Set(['127.0.0.1', '127.0.0.1:25565', '
 const DEFAULT_SERVER_NAME = 'FlexCraft';
 const BUNDLED_CLIENT_MODS_DIR = 'client-mods';
 const BUNDLED_MODPACK_META_FILE = '.craftgate-client-mods.json';
+const REMOTE_CLIENT_MODS_BASE_URLS = [
+  'https://flex-craft.ru/client-mods',
+  'https://www.flex-craft.ru/client-mods',
+] as const;
 const QUICK_PLAY_PATH = 'quickPlay/log.json';
 const LOG_RETENTION = 160;
 const USER_AGENT = `flexcraft-launcher/0.1 (${process.platform}; ${process.arch})`;
@@ -220,6 +224,7 @@ interface RuntimeApiAsset {
 
 interface DownloadJob {
   url: string;
+  urls?: readonly string[];
   destination: string;
   expectedSha1?: string;
   expectedSha256?: string;
@@ -233,10 +238,25 @@ interface LaunchContext {
   javaSource: JavaSource;
 }
 
+interface ClientModpackMod {
+  file?: string;
+  sha1?: string;
+  sha256?: string;
+  size?: number;
+  slug?: string;
+  title?: string;
+  version?: string;
+}
+
+interface ResolvedClientMod extends ClientModpackMod {
+  file: string;
+}
+
 interface BundledModpackMeta {
-  mods?: Array<{
-    file?: string;
-  }>;
+  source?: string;
+  updatedAt?: string;
+  syncedAt?: string;
+  mods?: ClientModpackMod[];
 }
 
 function defaultConfig(): LauncherConfig {
@@ -257,6 +277,76 @@ function toConfigObject(input: unknown): Partial<LauncherConfig> {
 
 function coerceString(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+function normalizeManagedModFileName(raw: unknown): string | null {
+  const fileName = coerceString(raw).trim();
+
+  if (!fileName || fileName === '.' || fileName === '..') {
+    return null;
+  }
+
+  if (fileName.includes('/') || fileName.includes('\\') || fileName.includes(':') || fileName.includes('\0')) {
+    return null;
+  }
+
+  if (path.isAbsolute(fileName) || /^[a-z]:/i.test(fileName)) {
+    return null;
+  }
+
+  return fileName;
+}
+
+function normalizeHexDigest(raw: unknown, length: number): string | undefined {
+  const digest = coerceString(raw).trim().toLowerCase();
+  return new RegExp(`^[a-f0-9]{${length}}$`).test(digest) ? digest : undefined;
+}
+
+function normalizePositiveInteger(raw: unknown): number | undefined {
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+}
+
+function normalizeModpackMods(meta: BundledModpackMeta): ResolvedClientMod[] {
+  const modsByFile = new Map<string, ResolvedClientMod>();
+
+  for (const rawMod of meta.mods ?? []) {
+    if (!rawMod || typeof rawMod !== 'object') {
+      continue;
+    }
+
+    const file = normalizeManagedModFileName(rawMod.file);
+    if (!file || !file.toLowerCase().endsWith('.jar')) {
+      continue;
+    }
+
+    const mod: ResolvedClientMod = { ...rawMod, file };
+    const sha1 = normalizeHexDigest(rawMod.sha1, 40);
+    const sha256 = normalizeHexDigest(rawMod.sha256, 64);
+    const size = normalizePositiveInteger(rawMod.size);
+
+    if (sha1) {
+      mod.sha1 = sha1;
+    } else {
+      delete mod.sha1;
+    }
+
+    if (sha256) {
+      mod.sha256 = sha256;
+    } else {
+      delete mod.sha256;
+    }
+
+    if (size) {
+      mod.size = size;
+    } else {
+      delete mod.size;
+    }
+
+    modsByFile.set(file, mod);
+  }
+
+  return [...modsByFile.values()];
 }
 
 function maxRecommendedMemoryMb(): number {
@@ -497,7 +587,7 @@ function normalizeJvmArguments(args: string[]): string[] {
   });
 }
 
-function compareVersions(left: string, right: string): number {
+export function compareVersions(left: string, right: string): number {
   const leftParts = left.split(/[^0-9]+/).filter(Boolean).map(Number);
   const rightParts = right.split(/[^0-9]+/).filter(Boolean).map(Number);
   const length = Math.max(leftParts.length, rightParts.length);
@@ -802,7 +892,7 @@ async function fetchBuffer(url: string): Promise<Buffer> {
   });
 }
 
-async function fetchJson<T>(urls: readonly string[] | string[]): Promise<T> {
+export async function fetchJson<T>(urls: readonly string[] | string[]): Promise<T> {
   const errors: string[] = [];
 
   for (const url of urls) {
@@ -817,7 +907,7 @@ async function fetchJson<T>(urls: readonly string[] | string[]): Promise<T> {
   throw new Error(`Unable to fetch JSON. ${errors.join(' | ')}`);
 }
 
-async function downloadFile(job: DownloadJob, onProgress?: (downloadedBytes: number, totalBytes: number) => void): Promise<void> {
+export async function downloadFile(job: DownloadJob, onProgress?: (downloadedBytes: number, totalBytes: number) => void): Promise<void> {
   const minimumSize = job.minimumSize ?? 1;
   if (await fileLooksValid(job.destination, job.expectedSize, job.expectedSha1, job.expectedSha256, minimumSize)) {
     onProgress?.(job.expectedSize ?? 0, job.expectedSize ?? 0);
@@ -826,7 +916,7 @@ async function downloadFile(job: DownloadJob, onProgress?: (downloadedBytes: num
 
   await ensureDirectory(path.dirname(job.destination));
 
-  const urls = candidateUrls(job.url);
+  const urls = [...new Set([...candidateUrls(job.url), ...(job.urls ?? [])])];
   const tempPath = `${job.destination}.tmp`;
   const errors: string[] = [];
 
@@ -888,7 +978,7 @@ async function readJsonFile<T>(filePath: string): Promise<T> {
   return JSON.parse(content) as T;
 }
 
-async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
+export async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   await ensureDirectory(path.dirname(filePath));
   await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
@@ -990,31 +1080,50 @@ async function readManagedModFiles(metaPath: string): Promise<string[]> {
     return [];
   }
 
-  const files = new Set<string>();
-
-  for (const mod of meta.mods) {
-    const file = typeof mod?.file === 'string' ? mod.file.trim() : '';
-    if (file && !file.includes('/') && !file.includes('\\')) {
-      files.add(file);
-    }
-  }
-
-  return [...files];
+  return normalizeModpackMods(meta).map((mod) => mod.file);
 }
 
-async function listBundledModFiles(sourceModsDir: string): Promise<string[]> {
+async function readBundledModpack(sourceModsDir: string): Promise<{ meta: BundledModpackMeta; mods: ResolvedClientMod[] }> {
   const metaPath = path.join(sourceModsDir, BUNDLED_MODPACK_META_FILE);
-  const managedFiles = await readManagedModFiles(metaPath);
+  const meta = (await pathExists(metaPath)) ? await readJsonFile<BundledModpackMeta>(metaPath).catch(() => ({})) : {};
+  const managedMods = normalizeModpackMods(meta);
 
-  if (managedFiles.length > 0) {
-    return [BUNDLED_MODPACK_META_FILE, ...managedFiles];
+  if (managedMods.length > 0) {
+    return { meta, mods: managedMods };
   }
 
   const entries = await readdir(sourceModsDir, { withFileTypes: true }).catch(() => []);
-  return entries
+  const mods = entries
     .filter((entry) => entry.isFile())
     .map((entry) => entry.name)
-    .filter((fileName) => fileName === BUNDLED_MODPACK_META_FILE || fileName.toLowerCase().endsWith('.jar'));
+    .map((fileName) => normalizeManagedModFileName(fileName))
+    .filter((fileName): fileName is string => Boolean(fileName))
+    .filter((fileName) => fileName.toLowerCase().endsWith('.jar'))
+    .map((file) => ({ file }));
+
+  return { meta, mods };
+}
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, '');
+}
+
+function remoteClientModpackManifestUrls(): string[] {
+  return REMOTE_CLIENT_MODS_BASE_URLS.map((baseUrl) => `${trimTrailingSlash(baseUrl)}/mods/${BUNDLED_MODPACK_META_FILE}`);
+}
+
+function remoteClientModUrls(fileName: string): string[] {
+  const encodedFileName = encodeURIComponent(fileName);
+  return REMOTE_CLIENT_MODS_BASE_URLS.map((baseUrl) => `${trimTrailingSlash(baseUrl)}/mods/${encodedFileName}`);
+}
+
+function metaForInstalledClientMods(meta: BundledModpackMeta, mods: ResolvedClientMod[], source: 'remote' | 'bundled'): BundledModpackMeta {
+  return {
+    ...meta,
+    source,
+    syncedAt: new Date().toISOString(),
+    mods,
+  };
 }
 
 async function runWithConcurrency<T>(
@@ -1307,7 +1416,7 @@ export class LauncherService {
 
     this.syncConfigUsernameFromSession();
     await this.runStartupStep('Список серверов', () => this.syncServerList());
-    await this.runStartupStep('Клиентские моды', () => this.syncBundledMods());
+    await this.runStartupStep('Клиентские моды', () => this.syncClientMods());
     this.status.versionId = this.config.preferredVersion;
     await this.runStartupStep('Статус лаунчера', () => this.refreshStatus());
   }
@@ -1487,6 +1596,66 @@ export class LauncherService {
     await writeFile(path.join(this.paths.gameDir, 'servers.dat'), createServersDat(DEFAULT_SERVER_NAME, serverAddress));
   }
 
+  private async syncClientMods(): Promise<void> {
+    try {
+      await this.syncRemoteClientMods();
+      return;
+    } catch (error) {
+      this.pushLog(`Не удалось обновить клиентские моды с сайта: ${formatError(error)}`);
+    }
+
+    await this.syncBundledMods();
+  }
+
+  private async syncRemoteClientMods(): Promise<void> {
+    const meta = await fetchJson<BundledModpackMeta>(remoteClientModpackManifestUrls());
+    const mods = normalizeModpackMods(meta);
+
+    if (mods.length === 0) {
+      throw new Error('Remote modpack manifest does not contain valid mods.');
+    }
+
+    const destinationModsDir = path.join(this.paths.gameDir, 'mods');
+    const destinationMetaPath = path.join(destinationModsDir, BUNDLED_MODPACK_META_FILE);
+    const previousManagedFiles = await readManagedModFiles(destinationMetaPath);
+    const managedFiles = new Set(mods.map((mod) => mod.file));
+
+    await ensureDirectory(destinationModsDir);
+
+    for (const fileName of previousManagedFiles) {
+      if (!managedFiles.has(fileName)) {
+        await rm(path.join(destinationModsDir, fileName), { force: true });
+      }
+    }
+
+    let synced = 0;
+    await runWithConcurrency(mods, 3, async (mod) => {
+      const urls = remoteClientModUrls(mod.file);
+      await downloadFile(
+        {
+          url: urls[0],
+          urls: urls.slice(1),
+          destination: path.join(destinationModsDir, mod.file),
+          expectedSha1: mod.sha1,
+          expectedSha256: mod.sha256,
+          expectedSize: mod.size,
+          minimumSize: 1024,
+        },
+        (downloadedBytes, totalBytes) => {
+          if (totalBytes > 0) {
+            this.updateProgress('client-mod', downloadedBytes, totalBytes, `Скачиваем мод ${mod.file}...`);
+          }
+        },
+      );
+
+      synced += 1;
+      this.updateProgress('client-mods', synced, mods.length, `Синхронизируем моды FlexCraft ${synced}/${mods.length}`);
+    });
+
+    await writeJsonFile(destinationMetaPath, metaForInstalledClientMods(meta, mods, 'remote'));
+    this.pushLog(`Моды FlexCraft обновлены с сайта: ${mods.length}.`);
+  }
+
   private async syncBundledMods(): Promise<void> {
     const bundledDir = await findBundledClientModsDir();
     if (!bundledDir) {
@@ -1503,29 +1672,36 @@ export class LauncherService {
     const destinationModsDir = path.join(this.paths.gameDir, 'mods');
     const destinationMetaPath = path.join(destinationModsDir, BUNDLED_MODPACK_META_FILE);
     const previousManagedFiles = await readManagedModFiles(destinationMetaPath);
-    const bundledFiles = await listBundledModFiles(sourceModsDir);
+    const { meta, mods } = await readBundledModpack(sourceModsDir);
+    const managedFiles = new Set(mods.map((mod) => mod.file));
+
+    if (mods.length === 0) {
+      this.pushLog('Встроенный модпак FlexCraft пуст.');
+      return;
+    }
 
     await ensureDirectory(destinationModsDir);
 
     for (const fileName of previousManagedFiles) {
-      if (!bundledFiles.includes(fileName)) {
+      if (!managedFiles.has(fileName)) {
         await rm(path.join(destinationModsDir, fileName), { force: true });
       }
     }
 
     let copied = 0;
-    for (const fileName of bundledFiles) {
-      const sourcePath = path.join(sourceModsDir, fileName);
-      const destinationPath = path.join(destinationModsDir, fileName);
+    for (const mod of mods) {
+      const sourcePath = path.join(sourceModsDir, mod.file);
+      const destinationPath = path.join(destinationModsDir, mod.file);
 
       if (!(await pathExists(sourcePath))) {
         continue;
       }
 
       await writeFile(destinationPath, await readFile(sourcePath));
-      copied += fileName.toLowerCase().endsWith('.jar') ? 1 : 0;
+      copied += 1;
     }
 
+    await writeJsonFile(destinationMetaPath, metaForInstalledClientMods(meta, mods, 'bundled'));
     this.pushLog(`Синхронизировано модов FlexCraft: ${copied}.`);
   }
 
@@ -1910,7 +2086,7 @@ export class LauncherService {
     });
 
     await this.extractNativeLibraries(versionId, versionFile, nativeArtifacts);
-    await this.syncBundledMods();
+    await this.syncClientMods();
 
     this.status.installed = true;
     this.status.javaReady = true;

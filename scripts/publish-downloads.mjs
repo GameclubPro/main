@@ -1,4 +1,5 @@
-import { copyFile, link, mkdir, rm, stat } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -14,13 +15,12 @@ const sourceArtifacts = {
   portable: `FlexCraft-Launcher-${version}-portable-win-x64.exe`,
   zip: `${artifactBase}.zip`,
 };
-const compatibilityVersions = ['0.1.0', '0.1.1', '0.1.2', '0.1.3', '0.1.4', '0.1.5', '0.1.6', '0.1.7'];
 const minimumArtifactBytes = 1024 * 1024;
 
 await rm(downloadsDir, { recursive: true, force: true });
 await mkdir(downloadsDir, { recursive: true });
 
-async function publishArtifact(sourceName, targetName, { hardlink = false } = {}) {
+async function publishArtifact(sourceName, targetName) {
   const sourcePath = path.join(rootDir, 'release', sourceName);
   const targetPath = path.join(downloadsDir, targetName);
   const sourceStat = await stat(sourcePath).catch(() => null);
@@ -33,28 +33,41 @@ async function publishArtifact(sourceName, targetName, { hardlink = false } = {}
     throw new Error(`Packaged artifact is suspiciously small (${sourceStat.size} bytes): ${sourcePath}`);
   }
 
-  if (hardlink) {
-    await link(sourcePath, targetPath).catch(async () => copyFile(sourcePath, targetPath));
-  } else {
-    await copyFile(sourcePath, targetPath);
-  }
+  await copyFile(sourcePath, targetPath);
 
   console.log(`Published ${targetName} to dist/downloads`);
 }
 
-await publishArtifact(sourceArtifacts.installer, `${artifactBase}.exe`);
-await publishArtifact(sourceArtifacts.zip, sourceArtifacts.zip);
-await publishArtifact(sourceArtifacts.portable, sourceArtifacts.portable);
+await publishArtifact(sourceArtifacts.installer, 'FlexCraft-Launcher-latest-win-x64.exe');
+await publishArtifact(sourceArtifacts.zip, 'FlexCraft-Launcher-latest-win-x64.zip');
+await publishArtifact(sourceArtifacts.portable, 'FlexCraft-Launcher-latest-portable-win-x64.exe');
 
-await publishArtifact(sourceArtifacts.installer, 'FlexCraft-Launcher-latest-win-x64.exe', { hardlink: true });
-await publishArtifact(sourceArtifacts.installer, 'FlexCraft-Launcher-latest.exe', { hardlink: true });
-await publishArtifact(sourceArtifacts.zip, 'FlexCraft-Launcher-latest-win-x64.zip', { hardlink: true });
-await publishArtifact(sourceArtifacts.portable, 'FlexCraft-Launcher-latest-portable-win-x64.exe', { hardlink: true });
-
-for (const aliasVersion of compatibilityVersions) {
-  await publishArtifact(sourceArtifacts.installer, `FlexCraft-Launcher-${aliasVersion}-win-x64.exe`, { hardlink: true });
-  await publishArtifact(sourceArtifacts.zip, `FlexCraft-Launcher-${aliasVersion}-win-x64.zip`, { hardlink: true });
-  await publishArtifact(sourceArtifacts.portable, `FlexCraft-Launcher-${aliasVersion}-portable-win-x64.exe`, { hardlink: true });
-}
+const latestInstallerPath = path.join(downloadsDir, 'FlexCraft-Launcher-latest-win-x64.exe');
+const latestInstaller = await readFile(latestInstallerPath);
+await writeFile(
+  path.join(downloadsDir, 'latest.json'),
+  `${JSON.stringify(
+    {
+      version,
+      platform: 'win32',
+      arch: 'x64',
+      installer: {
+        url: 'https://flex-craft.ru/downloads/FlexCraft-Launcher-latest-win-x64.exe',
+        fallbackUrls: [
+          'https://www.flex-craft.ru/downloads/FlexCraft-Launcher-latest-win-x64.exe',
+        ],
+        file: 'FlexCraft-Launcher-latest-win-x64.exe',
+        sha1: createHash('sha1').update(latestInstaller).digest('hex'),
+        size: latestInstaller.byteLength,
+        silentArgs: ['/S'],
+      },
+      publishedAt: new Date().toISOString(),
+    },
+    null,
+    2,
+  )}\n`,
+  'utf8',
+);
+console.log('Published latest.json to dist/downloads');
 
 process.exitCode = 0;

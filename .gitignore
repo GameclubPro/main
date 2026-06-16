@@ -31,3 +31,5 @@ Thumbs.db
 .idea/
 vk codex
 vk codex.txt
+vk codex*.txt*
+/work/

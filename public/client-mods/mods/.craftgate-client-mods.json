@@ -8,49 +8,66 @@
       "slug": "fabric-api",
       "title": "Fabric API",
       "version": "0.151.0+26.1.2",
-      "file": "fabric-api-0.151.0+26.1.2.jar"
-    },
-    {
-      "slug": "xaeros-minimap",
-      "title": "Xaero's Minimap",
-      "version": "fabric-26.1.2-26.1.0",
-      "file": "xaerominimap-fabric-26.1.2-26.1.0.jar"
-    },
-    {
-      "slug": "xaeros-world-map",
-      "title": "Xaero's World Map",
-      "version": "fabric-26.1.2-1.41.0",
-      "file": "xaeroworldmap-fabric-26.1.2-1.41.0.jar"
-    },
-    {
-      "slug": "modmenu",
-      "title": "Mod Menu",
-      "version": "18.0.0-beta.1",
-      "file": "modmenu-18.0.0-beta.1.jar"
-    },
-    {
-      "slug": "simple-voice-chat",
-      "title": "Simple Voice Chat",
-      "version": "fabric-2.6.18+26.1.2",
-      "file": "voicechat-fabric-2.6.18+26.1.2.jar"
-    },
-    {
-      "slug": "open-parties-and-claims",
-      "title": "Open Parties and Claims",
-      "version": "fabric-26.1.2-0.27.5",
-      "file": "open-parties-and-claims-fabric-26.1.2-0.27.5.jar"
-    },
-    {
-      "slug": "forge-config-api-port",
-      "title": "Forge Config API Port",
-      "version": "26.1.5",
-      "file": "ForgeConfigAPIPort-v26.1.5-mc26.1.x-Fabric.jar"
+      "file": "fabric-api-0.151.0+26.1.2.jar",
+      "size": 2498064,
+      "sha1": "f44f652ecb5e95d20d67aa6e49a312c058a4de09"
     },
     {
       "slug": "fabric-language-kotlin",
       "title": "Fabric Language Kotlin",
       "version": "1.13.12+kotlin.2.4.0",
-      "file": "fabric-language-kotlin-1.13.12+kotlin.2.4.0.jar"
+      "file": "fabric-language-kotlin-1.13.12+kotlin.2.4.0.jar",
+      "size": 8076848,
+      "sha1": "2bc17bb4275cc70a12e4ac35d139a71a30845720"
+    },
+    {
+      "slug": "forge-config-api-port",
+      "title": "Forge Config API Port",
+      "version": "26.1.5",
+      "file": "ForgeConfigAPIPort-v26.1.5-mc26.1.x-Fabric.jar",
+      "size": 609711,
+      "sha1": "82e4deaa210b75d3b51a268769ad24cc85796235"
+    },
+    {
+      "slug": "modmenu",
+      "title": "Mod Menu",
+      "version": "18.0.0-beta.1",
+      "file": "modmenu-18.0.0-beta.1.jar",
+      "size": 855297,
+      "sha1": "52fff4a942dd42d4bdb6d149d0396cbf2ce69016"
+    },
+    {
+      "slug": "open-parties-and-claims",
+      "title": "Open Parties and Claims",
+      "version": "fabric-26.1.2-0.27.5",
+      "file": "open-parties-and-claims-fabric-26.1.2-0.27.5.jar",
+      "size": 1719875,
+      "sha1": "608412f096be0cd8ce1651e794cbe9b930a34b11"
+    },
+    {
+      "slug": "simple-voice-chat",
+      "title": "Simple Voice Chat",
+      "version": "fabric-2.6.18+26.1.2",
+      "file": "voicechat-fabric-2.6.18+26.1.2.jar",
+      "size": 5510314,
+      "sha1": "bc354f3e81f3a0ef5fe5ad22bbbdf26199d353cd"
+    },
+    {
+      "slug": "xaeros-minimap",
+      "title": "Xaero's Minimap",
+      "version": "fabric-26.1.2-26.1.0",
+      "file": "xaerominimap-fabric-26.1.2-26.1.0.jar",
+      "size": 2165184,
+      "sha1": "f571961e0971a01631857ae14b29283a5a71754d"
+    },
+    {
+      "slug": "xaeros-world-map",
+      "title": "Xaero's World Map",
+      "version": "fabric-26.1.2-1.41.0",
+      "file": "xaeroworldmap-fabric-26.1.2-1.41.0.jar",
+      "size": 1442606,
+      "sha1": "b1c6d48813a827b67fb67b31917a060311e8ecc5"
     }
-  ]
+  ],
+  "updatedAt": "2026-06-16T08:05:40.313Z"
 }

@@ -1,6 +1,6 @@
 {
   "name": "flexcraft-launcher",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "private": true,
   "description": "FlexCraft desktop launcher.",
   "author": "FlexCraft",
@@ -14,12 +14,15 @@
     "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
     "dev:renderer": "vite --host 127.0.0.1",
     "dev:electron": "wait-on tcp:5174 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5174 electron .",
-    "electron": "cross-env ELECTRON_RUN_AS_NODE= electron .",
+    "electron": "electron .",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "build": "tsc -p tsconfig.json && tsc -p electron/tsconfig.json && node scripts/write-electron-package.mjs && vite build",
+    "build": "node scripts/generate-client-mods-manifest.mjs && tsc -p tsconfig.json && tsc -p electron/tsconfig.json && node scripts/write-electron-package.mjs && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "archive:source": "node scripts/create-source-archive.mjs",
-    "package:win": "npm run build && electron-builder --win nsis portable zip --x64 && node scripts/publish-downloads.mjs"
+    "package:win": "npm run build && electron-builder --win nsis portable zip --x64 && node scripts/publish-downloads.mjs",
+    "deploy:vk": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy-vk-vm.ps1 all",
+    "deploy:vk:site": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy-vk-vm.ps1 site",
+    "deploy:vk:downloads": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy-vk-vm.ps1 downloads"
   },
   "dependencies": {
     "fflate": "^0.8.3",
@@ -44,6 +47,9 @@
   "build": {
     "appId": "ru.flexcraft.launcher",
     "productName": "FlexCraft",
+    "toolsets": {
+      "nsis": "1.2.1"
+    },
     "directories": {
       "output": "release"
     },

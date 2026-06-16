@@ -1,7 +1,16 @@
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { appendFileSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { app, BrowserWindow, crashReporter, dialog, ipcMain, shell } from 'electron';
-import { LauncherService, type AuthFormInput, type LauncherConfig, type LauncherSnapshot } from './launcherCore.js';
+import {
+  compareVersions,
+  downloadFile,
+  fetchJson,
+  LauncherService,
+  type AuthFormInput,
+  type LauncherConfig,
+  type LauncherSnapshot,
+} from './launcherCore.js';
 
 let mainWindow: Electron.BrowserWindow | null = null;
 let launcherService: LauncherService | null = null;
@@ -28,6 +37,23 @@ const maxLogBytes = 10 * 1024 * 1024;
 const maxRotatedLogs = 4;
 const maxCrashDumpAgeMs = 30 * 24 * 60 * 60 * 1000;
 const maxCrashDumps = 20;
+const launcherUpdateManifestUrls = [
+  'https://flex-craft.ru/downloads/latest.json',
+  'https://www.flex-craft.ru/downloads/latest.json',
+] as const;
+
+interface LauncherUpdateManifest {
+  version?: string;
+  installer?: {
+    url?: string;
+    fallbackUrls?: string[];
+    file?: string;
+    sha1?: string;
+    sha256?: string;
+    size?: number;
+    silentArgs?: string[];
+  };
+}
 
 const ensureWritableDirectory = (targetPath: string) => {
   mkdirSync(targetPath, { recursive: true });
@@ -224,6 +250,130 @@ const broadcastSnapshot = (snapshot: LauncherSnapshot) => {
   mainWindow.webContents.send('launcher:snapshot', snapshot);
 };
 
+const normalizeUpdateDigest = (value: unknown, length: number): string | undefined => {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const digest = value.trim().toLowerCase();
+  return new RegExp(`^[a-f0-9]{${length}}$`).test(digest) ? digest : undefined;
+};
+
+const normalizeUpdateSize = (value: unknown): number | undefined => {
+  const size = Number(value);
+  return Number.isFinite(size) && size > 0 ? Math.floor(size) : undefined;
+};
+
+const normalizeInstallerFileName = (value: unknown): string => {
+  if (typeof value !== 'string') {
+    return 'FlexCraft-Launcher-update.exe';
+  }
+
+  const fileName = path.basename(value.trim());
+  return fileName.toLowerCase().endsWith('.exe') ? fileName : 'FlexCraft-Launcher-update.exe';
+};
+
+const normalizeSilentArgs = (value: unknown): string[] => {
+  if (!Array.isArray(value)) {
+    return ['/S'];
+  }
+
+  const args = value
+    .filter((entry): entry is string => typeof entry === 'string')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .slice(0, 12);
+
+  return args.length > 0 ? args : ['/S'];
+};
+
+const showLauncherMessageBox = async (options: Electron.MessageBoxOptions): Promise<Electron.MessageBoxReturnValue> => {
+  const parentWindow = mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() ? mainWindow : null;
+  return parentWindow ? dialog.showMessageBox(parentWindow, options) : dialog.showMessageBox(options);
+};
+
+const runLauncherUpdateCheck = async (): Promise<boolean> => {
+  if (process.platform !== 'win32') {
+    return false;
+  }
+
+  let manifest: LauncherUpdateManifest;
+  try {
+    manifest = await fetchJson<LauncherUpdateManifest>(launcherUpdateManifestUrls);
+  } catch (error) {
+    appendStartupLog(`Launcher update check failed: ${formatStartupError(error)}`);
+    return false;
+  }
+
+  const latestVersion = typeof manifest.version === 'string' ? manifest.version.trim() : '';
+  const currentVersion = app.getVersion();
+  if (!latestVersion || compareVersions(currentVersion, latestVersion) >= 0) {
+    appendStartupLog(`Launcher is up to date: ${currentVersion}.`);
+    return false;
+  }
+
+  const installerUrl = manifest.installer?.url?.trim();
+  if (!installerUrl || !/^https:\/\//i.test(installerUrl)) {
+    appendStartupLog(`Launcher update ${latestVersion} ignored: installer URL is missing.`);
+    return false;
+  }
+
+  const response = await showLauncherMessageBox({
+    type: 'info',
+    title: 'Доступно обновление FlexCraft',
+    message: `Доступна новая версия FlexCraft ${latestVersion}`,
+    detail: `Сейчас установлена версия ${currentVersion}. Нажмите «Обновить», и лаунчер сам скачает и установит новую версию.`,
+    buttons: ['Обновить'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  });
+
+  if (response.response !== 0) {
+    appendStartupLog(`Launcher update ${latestVersion} was not accepted by the user.`);
+    return false;
+  }
+
+  const fileName = normalizeInstallerFileName(manifest.installer?.file);
+  const destination = path.join(dataRootPath(), 'cache', 'launcher-updates', `${latestVersion}-${fileName}`);
+  const fallbackUrls = Array.isArray(manifest.installer?.fallbackUrls)
+    ? manifest.installer.fallbackUrls.filter((url): url is string => typeof url === 'string' && /^https:\/\//i.test(url.trim())).map((url) => url.trim())
+    : [];
+
+  try {
+    appendStartupLog(`Downloading launcher update ${latestVersion} to ${destination}.`);
+    await downloadFile({
+      url: installerUrl,
+      urls: fallbackUrls,
+      destination,
+      expectedSha1: normalizeUpdateDigest(manifest.installer?.sha1, 40),
+      expectedSha256: normalizeUpdateDigest(manifest.installer?.sha256, 64),
+      expectedSize: normalizeUpdateSize(manifest.installer?.size),
+      minimumSize: 1024 * 1024,
+    });
+
+    appendStartupLog(`Starting launcher update installer: ${destination}`);
+    const installer = spawn(destination, normalizeSilentArgs(manifest.installer?.silentArgs), {
+      detached: true,
+      stdio: 'ignore',
+    });
+    installer.unref();
+    app.quit();
+    return true;
+  } catch (error) {
+    appendStartupLog(`Launcher update ${latestVersion} failed: ${formatStartupError(error)}`);
+    await showLauncherMessageBox({
+      type: 'error',
+      title: 'Не удалось обновить FlexCraft',
+      message: 'Автоматическое обновление не завершилось.',
+      detail: formatStartupError(error),
+      buttons: ['ОК'],
+      noLink: true,
+    });
+    return false;
+  }
+};
+
 const createWindow = () => {
   const window = new BrowserWindow({
     width: 1160,
@@ -373,6 +523,10 @@ const registerIpc = () => {
   });
   ipcMain.handle('launcher:launchLatestVanilla', async () => {
     const service = requireService();
+    if (await runLauncherUpdateCheck()) {
+      return service.getSnapshot();
+    }
+
     await service.launchLatestVanilla();
     return service.getSnapshot();
   });
@@ -426,10 +580,17 @@ app.whenReady().then(async () => {
   mainWindow = createWindow();
 
   try {
+    if (await runLauncherUpdateCheck()) {
+      return;
+    }
+
     appendStartupLog('Initializing launcher service.');
     await launcherService.initialize();
     appendStartupLog('Launcher service initialized.');
     broadcastSnapshot(launcherService.getSnapshot());
+    void runLauncherUpdateCheck().catch((error) => {
+      appendStartupLog(`Launcher update check crashed: ${formatStartupError(error)}`);
+    });
   } catch (error) {
     showStartupError(error);
   }
