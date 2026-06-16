@@ -23,6 +23,7 @@ const REMOTE_CLIENT_MODS_BASE_URLS = [
   'https://flex-craft.ru/client-mods',
   'https://www.flex-craft.ru/client-mods',
 ] as const;
+const AUTH_API_BASE_URL = 'https://flex-craft.ru/api';
 const QUICK_PLAY_PATH = 'quickPlay/log.json';
 const LOG_RETENTION = 160;
 const USER_AGENT = `flexcraft-launcher/0.1 (${process.platform}; ${process.arch})`;
@@ -50,6 +51,12 @@ export interface TestAccount {
   createdAt: string;
 }
 
+export interface LauncherAccountFile {
+  accounts?: TestAccount[];
+  session?: AuthSession | null;
+  launcherAuth?: StoredLauncherAuth | null;
+}
+
 export interface PublicTestAccount {
   id: string;
   login: string;
@@ -61,12 +68,46 @@ export interface AuthSession {
   accountId: string;
   login: string;
   username: string;
+  source?: 'local' | 'flexcraft';
+  email?: string;
+  emailVerified?: boolean;
 }
 
 export interface AuthFormInput {
   login: string;
   username?: string;
   password: string;
+}
+
+export interface StoredLauncherAuth {
+  token: string;
+  user: FlexCraftUser;
+  createdAt: string;
+}
+
+export interface FlexCraftUser {
+  id: string;
+  login: string;
+  nickname: string;
+  email?: string;
+  emailVerified?: boolean;
+  createdAt?: string;
+}
+
+export interface LauncherDeviceStart {
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete?: string;
+  expiresIn: number;
+  interval: number;
+}
+
+export interface LauncherDevicePoll {
+  status: 'pending' | 'approved' | 'expired' | 'denied';
+  token?: string;
+  user?: FlexCraftUser;
+  interval?: number;
 }
 
 export interface LauncherProgress {
@@ -248,6 +289,20 @@ interface ClientModpackMod {
   version?: string;
 }
 
+interface ApiEnvelope<T> {
+  ok?: boolean;
+  error?: string;
+  user?: FlexCraftUser;
+  status?: LauncherDevicePoll['status'];
+  token?: string;
+  deviceCode?: string;
+  userCode?: string;
+  verificationUri?: string;
+  verificationUriComplete?: string;
+  expiresIn?: number;
+  interval?: number;
+}
+
 interface ResolvedClientMod extends ClientModpackMod {
   file: string;
 }
@@ -424,8 +479,60 @@ function toPublicAccount(account: TestAccount): PublicTestAccount {
   };
 }
 
+function flexUserToSession(user: FlexCraftUser): AuthSession {
+  return {
+    accountId: user.id,
+    login: user.login,
+    username: sanitizeUsername(user.nickname || user.login),
+    source: 'flexcraft',
+    email: coerceString(user.email).trim() || undefined,
+    emailVerified: Boolean(user.emailVerified),
+  };
+}
+
 function hashPassword(password: string): string {
   return createHash('sha256').update(password, 'utf8').digest('hex');
+}
+
+function sanitizeFlexCraftUser(raw: unknown): FlexCraftUser | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+
+  const user = raw as Partial<FlexCraftUser>;
+  const id = coerceString(user.id).trim();
+  const login = sanitizeLogin(user.login);
+  const nickname = sanitizeUsername(user.nickname || user.login);
+
+  if (!id || login.length < 3 || nickname.length < 3) {
+    return null;
+  }
+
+  return {
+    id,
+    login,
+    nickname,
+    email: coerceString(user.email).trim() || undefined,
+    emailVerified: Boolean(user.emailVerified),
+    createdAt: coerceString(user.createdAt).trim() || undefined,
+  };
+}
+
+function sanitizeStoredLauncherAuth(raw: unknown): StoredLauncherAuth | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+
+  const auth = raw as Partial<StoredLauncherAuth>;
+  const token = coerceString(auth.token).trim();
+  const user = sanitizeFlexCraftUser(auth.user);
+  const createdAt = coerceString(auth.createdAt).trim() || new Date().toISOString();
+
+  if (token.length < 20 || !user) {
+    return null;
+  }
+
+  return { token, user, createdAt };
 }
 
 function createAccountId(login: string): string {
@@ -456,12 +563,16 @@ function sanitizeStoredAccount(account: unknown): TestAccount | null {
   };
 }
 
-function sanitizeStoredSession(session: unknown, accounts: TestAccount[]): AuthSession | null {
+function sanitizeStoredSession(session: unknown, accounts: TestAccount[], launcherAuth?: StoredLauncherAuth | null): AuthSession | null {
   if (!session || typeof session !== 'object') {
     return null;
   }
 
   const raw = session as Partial<AuthSession>;
+  if (raw.source === 'flexcraft' && launcherAuth?.user && raw.accountId === launcherAuth.user.id) {
+    return flexUserToSession(launcherAuth.user);
+  }
+
   const login = sanitizeLogin(raw.login);
   const account = accounts.find((entry) => entry.login === login || entry.id === raw.accountId);
 
@@ -473,7 +584,37 @@ function sanitizeStoredSession(session: unknown, accounts: TestAccount[]): AuthS
     accountId: account.id,
     login: account.login,
     username: account.username,
+    source: 'local',
   };
+}
+
+async function fetchApi<T>(pathName: string, options: { method?: string; body?: unknown; token?: string } = {}): Promise<T> {
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+  };
+  let body: string | undefined;
+
+  if (options.body !== undefined) {
+    headers['Content-Type'] = 'application/json';
+    body = JSON.stringify(options.body);
+  }
+
+  if (options.token) {
+    headers.Authorization = `Bearer ${options.token}`;
+  }
+
+  const response = await fetch(`${AUTH_API_BASE_URL}${pathName}`, {
+    method: options.method ?? 'GET',
+    headers,
+    body,
+  });
+  const payload = (await response.json().catch(() => ({}))) as ApiEnvelope<T>;
+
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.error || `FlexCraft API ${response.status}`);
+  }
+
+  return payload as T;
 }
 
 function minecraftOsName(): 'linux' | 'windows' | 'osx' {
@@ -1332,6 +1473,7 @@ export class LauncherService {
   private status: LauncherStatus;
   private accounts: TestAccount[] = [];
   private session: AuthSession | null = null;
+  private launcherAuth: StoredLauncherAuth | null = null;
   private versionIndex: VersionManifestIndex | null = null;
   private activeTask: Promise<void> | null = null;
   private launchProcess: ChildProcessWithoutNullStreams | null = null;
@@ -1401,19 +1543,21 @@ export class LauncherService {
     }
 
     if (await pathExists(this.paths.accountsPath)) {
-      const stored = await this.readStartupJsonOrRestore<{ accounts?: TestAccount[]; session?: AuthSession | null }>(
+      const stored = await this.readStartupJsonOrRestore<LauncherAccountFile>(
         this.paths.accountsPath,
-        { accounts: [], session: null },
+        { accounts: [], session: null, launcherAuth: null },
         'профили лаунчера',
       );
       this.accounts = Array.isArray(stored.accounts)
         ? stored.accounts.map(sanitizeStoredAccount).filter((account): account is TestAccount => Boolean(account))
         : [];
-      this.session = sanitizeStoredSession(stored.session, this.accounts);
+      this.launcherAuth = sanitizeStoredLauncherAuth(stored.launcherAuth);
+      this.session = sanitizeStoredSession(stored.session, this.accounts, this.launcherAuth);
     } else {
       await this.persistAccounts();
     }
 
+    await this.refreshLauncherAuthSession();
     this.syncConfigUsernameFromSession();
     await this.runStartupStep('Список серверов', () => this.syncServerList());
     await this.runStartupStep('Клиентские моды', () => this.syncClientMods());
@@ -1520,9 +1664,62 @@ export class LauncherService {
       this.pushLog(`Выход из профиля: ${this.session.login}.`);
     }
 
+    if (this.launcherAuth?.token) {
+      await fetchApi('/launcher/session/logout', { method: 'POST', token: this.launcherAuth.token }).catch(() => {});
+    }
+
     this.session = null;
+    this.launcherAuth = null;
     await this.persistAccounts();
     await this.refreshStatus();
+    return this.getSnapshot();
+  }
+
+  async startLauncherAccountLink(): Promise<LauncherDeviceStart> {
+    const response = await fetchApi<ApiEnvelope<LauncherDeviceStart>>('/launcher/device/start', { method: 'POST' });
+    if (!response.deviceCode || !response.userCode || !response.verificationUri) {
+      throw new Error('Сервер авторизации не вернул код входа.');
+    }
+
+    return {
+      deviceCode: response.deviceCode,
+      userCode: response.userCode,
+      verificationUri: response.verificationUri,
+      verificationUriComplete: response.verificationUriComplete,
+      expiresIn: Number(response.expiresIn || 600),
+      interval: Number(response.interval || 3),
+    };
+  }
+
+  async completeLauncherAccountLink(deviceCode: string): Promise<LauncherSnapshot> {
+    const response = await fetchApi<ApiEnvelope<LauncherDevicePoll>>('/launcher/device/poll', {
+      method: 'POST',
+      body: { deviceCode },
+    });
+
+    if (response.status === 'pending') {
+      throw new Error('pending');
+    }
+    if (response.status !== 'approved' || !response.token || !response.user) {
+      throw new Error(response.error || 'Не удалось подключить аккаунт FlexCraft.');
+    }
+
+    const user = sanitizeFlexCraftUser(response.user);
+    if (!user) {
+      throw new Error('Сервер вернул некорректный профиль.');
+    }
+
+    this.launcherAuth = {
+      token: response.token,
+      user,
+      createdAt: new Date().toISOString(),
+    };
+    this.session = flexUserToSession(user);
+    this.syncConfigUsernameFromSession();
+    await this.persistAccounts();
+    await writeJsonFile(this.paths.configPath, this.config);
+    await this.refreshStatus();
+    this.pushLog(`Подключён аккаунт FlexCraft: ${user.login}.`);
     return this.getSnapshot();
   }
 
@@ -1764,7 +1961,39 @@ export class LauncherService {
     await writeJsonFile(this.paths.accountsPath, {
       accounts: this.accounts,
       session: this.session,
+      launcherAuth: this.launcherAuth,
     });
+  }
+
+  private async refreshLauncherAuthSession(): Promise<void> {
+    if (!this.launcherAuth?.token) {
+      return;
+    }
+
+    try {
+      const response = await fetchApi<ApiEnvelope<FlexCraftUser>>('/launcher/session/me', {
+        method: 'POST',
+        token: this.launcherAuth.token,
+      });
+      const user = sanitizeFlexCraftUser(response.user);
+      if (!user) {
+        throw new Error('Сервер вернул некорректный профиль.');
+      }
+
+      this.launcherAuth = {
+        ...this.launcherAuth,
+        user,
+      };
+      this.session = flexUserToSession(user);
+      await this.persistAccounts();
+    } catch (error) {
+      this.pushLog(`Сессия FlexCraft недоступна: ${formatError(error)}`);
+      this.launcherAuth = null;
+      if (this.session?.source === 'flexcraft') {
+        this.session = null;
+      }
+      await this.persistAccounts();
+    }
   }
 
   private async runTask(title: string, work: () => Promise<void>): Promise<void> {

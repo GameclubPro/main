@@ -6,6 +6,7 @@ import {
   FolderOpen,
   Gamepad2,
   HardDrive,
+  KeyRound,
   LoaderCircle,
   LogOut,
   Play,
@@ -19,6 +20,7 @@ import {
 import { Component, type ErrorInfo, type ReactNode, useEffect, useMemo, useState } from 'react';
 import { LAUNCHER_VERSION } from '../launcherInfo';
 import { LandingPage } from './landingPage';
+import { LauncherLinkPage, ResetPasswordPage, VerifyEmailPage } from './siteAuth';
 
 const fallbackSnapshot: LauncherSnapshot = {
   config: {
@@ -98,6 +100,19 @@ function launchState(snapshot: LauncherSnapshot): string {
 }
 
 export function App() {
+  if (!window.launcher) {
+    const pathName = window.location.pathname;
+    if (pathName === '/auth/verify-email') {
+      return <VerifyEmailPage />;
+    }
+    if (pathName === '/auth/reset-password') {
+      return <ResetPasswordPage />;
+    }
+    if (pathName === '/launcher/link') {
+      return <LauncherLinkPage />;
+    }
+  }
+
   return (
     <RendererErrorBoundary>
       {window.launcher ? <LauncherApp /> : <LandingPage />}
@@ -137,6 +152,7 @@ function LauncherApp() {
   const [form, setForm] = useState<LauncherConfig>(fallbackSnapshot.config);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [authForm, setAuthForm] = useState<AuthFormInput>({ login: '', username: '', password: '' });
+  const [linkDevice, setLinkDevice] = useState<LauncherDeviceStart | null>(null);
   const [uiMessage, setUiMessage] = useState<string>('');
   const [savePending, setSavePending] = useState(false);
   const [authPending, setAuthPending] = useState(false);
@@ -238,6 +254,76 @@ function LauncherApp() {
       setAuthPending(false);
     }
   };
+
+  const startAccountLink = async () => {
+    if (!window.launcher) {
+      return;
+    }
+
+    setAuthPending(true);
+    setUiMessage('');
+    try {
+      const link = await window.launcher.startAccountLink();
+      setLinkDevice(link);
+      await window.launcher.openExternal(link.verificationUriComplete ?? link.verificationUri);
+      setUiMessage(`Открыл сайт FlexCraft. Код подключения: ${link.userCode}`);
+    } catch (error) {
+      setUiMessage(formatUiError(error));
+    } finally {
+      setAuthPending(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!linkDevice || snapshot.session) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const startedAt = Date.now();
+    const expiresAt = startedAt + linkDevice.expiresIn * 1000;
+
+    const poll = async () => {
+      if (!window.launcher || cancelled) {
+        return;
+      }
+
+      if (Date.now() >= expiresAt) {
+        setUiMessage('Код входа устарел. Нажмите «Войти через сайт» ещё раз.');
+        setLinkDevice(null);
+        return;
+      }
+
+      try {
+        const nextSnapshot = await window.launcher.completeAccountLink(linkDevice.deviceCode);
+        if (cancelled) {
+          return;
+        }
+        setSnapshot(nextSnapshot);
+        setForm(nextSnapshot.config);
+        setLinkDevice(null);
+        setUiMessage('Аккаунт FlexCraft подключён.');
+      } catch (error) {
+        if (!cancelled && formatUiError(error) === 'pending') {
+          timer = setTimeout(poll, Math.max(2, linkDevice.interval) * 1000);
+          return;
+        }
+
+        if (!cancelled) {
+          setUiMessage(formatUiError(error));
+        }
+      }
+    };
+
+    timer = setTimeout(poll, Math.max(2, linkDevice.interval) * 1000);
+    return () => {
+      cancelled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+    };
+  }, [linkDevice, snapshot.session]);
 
   const handleLogout = async () => {
     if (!window.launcher) {
@@ -351,6 +437,21 @@ function LauncherApp() {
 
           {!snapshot.session ? (
             <section className="authBox">
+              <button className="primaryButton fullWidth" type="button" onClick={startAccountLink} disabled={authPending || busy}>
+                {authPending ? <LoaderCircle size={18} className="spin" /> : <ShieldCheck size={18} />}
+                Войти через сайт
+              </button>
+
+              {linkDevice ? (
+                <div className="linkCodeBox">
+                  <span><KeyRound size={16} /> Код подключения</span>
+                  <strong>{linkDevice.userCode}</strong>
+                  <small>Подтвердите вход на flex-craft.ru, лаунчер продолжит сам.</small>
+                </div>
+              ) : null}
+
+              <div className="authDivider"><span>Локальный профиль</span></div>
+
               <div className="segmentedControl" role="tablist" aria-label="Профиль">
                 <button
                   type="button"

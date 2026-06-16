@@ -9,6 +9,7 @@ import {
   LauncherService,
   type AuthFormInput,
   type LauncherConfig,
+  type LauncherDeviceStart,
   type LauncherSnapshot,
 } from './launcherCore.js';
 
@@ -516,6 +517,15 @@ const registerIpc = () => {
   ipcMain.handle('launcher:registerTestAccount', async (_event, input: AuthFormInput) => requireService().registerTestAccount(input));
   ipcMain.handle('launcher:loginTestAccount', async (_event, input: AuthFormInput) => requireService().loginTestAccount(input));
   ipcMain.handle('launcher:logoutTestAccount', async () => requireService().logoutTestAccount());
+  ipcMain.handle('launcher:startAccountLink', async () => requireService().startLauncherAccountLink() as Promise<LauncherDeviceStart>);
+  ipcMain.handle('launcher:completeAccountLink', async (_event, deviceCode: string) => requireService().completeLauncherAccountLink(deviceCode));
+  ipcMain.handle('launcher:openExternal', async (_event, url: string) => {
+    if (!/^https:\/\/(?:www\.)?flex-craft\.ru\//i.test(url)) {
+      throw new Error('External URL is not allowed.');
+    }
+
+    await shell.openExternal(url);
+  });
   ipcMain.handle('launcher:installLatestVanilla', async () => {
     const service = requireService();
     await service.installLatestVanilla();

@@ -6,6 +6,7 @@ import {
   FolderSync,
   Gamepad2,
   HardDriveDownload,
+  Mail,
   MonitorDown,
   Server,
   ShieldCheck,
@@ -14,6 +15,7 @@ import {
 } from 'lucide-react';
 import heroImage from '../assets/launcher-hero.png';
 import { LAUNCHER_VERSION, WINDOWS_DOWNLOAD_EXE, WINDOWS_DOWNLOAD_PORTABLE } from '../launcherInfo';
+import { SiteAuthPanel } from './siteAuth';
 
 const features = [
   {
@@ -73,11 +75,12 @@ export function LandingPage() {
         </a>
         <nav>
           <a href="#server">Сервер</a>
+          <a href="#account">Аккаунт</a>
           <a href="#download">Скачать</a>
         </nav>
-        <a className="navDownload" href={WINDOWS_DOWNLOAD_EXE} download>
-          <Download size={17} />
-          Скачать
+        <a className="navDownload" href="#account">
+          <ShieldCheck size={17} />
+          Войти
         </a>
       </header>
 
@@ -185,6 +188,27 @@ export function LandingPage() {
               </article>
             );
           })}
+        </div>
+      </section>
+
+      <section className="accountBand" id="account">
+        <div className="sectionIntro">
+          <p className="siteEyebrow"><ShieldCheck size={15} /> Аккаунт FlexCraft</p>
+          <h2>Один профиль для сайта и лаунчера.</h2>
+          <p>Создайте аккаунт через email и пароль. После подтверждения почты этот же профиль можно подключить в лаунчере.</p>
+        </div>
+        <div className="accountBandGrid">
+          <SiteAuthPanel />
+          <div className="accountInfoPanel">
+            <span className="featureIcon"><Mail size={22} /></span>
+            <h3>Email-подтверждение</h3>
+            <p>После регистрации придёт ссылка. Аккаунт станет активным только после подтверждения, чтобы защитить ники и восстановление доступа.</p>
+            <ul>
+              <li><Check size={17} /> Пароль хранится только как защищённый hash</li>
+              <li><Check size={17} /> Сессия сайта хранится в HttpOnly cookie</li>
+              <li><Check size={17} /> Лаунчер подключается через браузерный код</li>
+            </ul>
+          </div>
         </div>
       </section>
 

@@ -24,6 +24,9 @@ if (-not $RemoteWebsitePath) { $RemoteWebsitePath = '/var/www/flexcraft' }
 $RemoteDownloadsPath = $env:VK_VM_DOWNLOADS_PATH
 if (-not $RemoteDownloadsPath) { $RemoteDownloadsPath = '/var/www/flexcraft/downloads' }
 
+$RemoteApiPath = $env:VK_VM_API_PATH
+if (-not $RemoteApiPath) { $RemoteApiPath = '/opt/flexcraft-auth' }
+
 $WorkDir = Join-Path $RootDir 'work\deploy'
 
 function Write-Usage {
@@ -33,6 +36,7 @@ VK VM deploy helper
 Usage:
   .\deploy-vk-vm.cmd site       Build and deploy the static website from dist
   .\deploy-vk-vm.cmd downloads  Package Windows launcher and deploy dist/downloads
+  .\deploy-vk-vm.cmd api        Deploy the FlexCraft auth API service
   .\deploy-vk-vm.cmd all        Package launcher, deploy website and downloads
   .\deploy-vk-vm.cmd existing   Deploy the current dist folder without rebuilding
   .\deploy-vk-vm.cmd check      Test SSH access and remote deploy directories
@@ -47,10 +51,111 @@ Environment:
   VK_VM_KEY_PATH                Default: $KeyPath
   VK_VM_WEBSITE_PATH            Default: $RemoteWebsitePath
   VK_VM_DOWNLOADS_PATH          Default: $RemoteDownloadsPath
+  VK_VM_API_PATH                Default: $RemoteApiPath
 
 Before deploy:
   SSH must work with .\connect-vk-vm.cmd or .\vk-cloud.cmd ssh-test.
 "@
+}
+
+function Deploy-Api {
+  Assert-Tools
+
+  $sourceDir = Join-Path $RootDir 'server'
+  if (-not (Test-Path -LiteralPath $sourceDir -PathType Container)) {
+    throw "API source directory was not found: $sourceDir"
+  }
+
+  $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+  $archivePath = New-Archive -SourceDir $sourceDir -Name "flexcraft-api-$stamp"
+  $remoteArchive = "/tmp/$(Split-Path -Leaf $archivePath)"
+
+  Invoke-Remote -Command "find /tmp -maxdepth 1 -type f -name 'flexcraft-*.tgz' -delete 2>/dev/null || true"
+  Write-Host 'Uploading api archive...'
+  Copy-ToRemote -LocalPath $archivePath -RemotePath $remoteArchive
+
+  $remoteApiPathQuoted = Quote-Sh -Value $RemoteApiPath
+  $remoteArchiveQuoted = Quote-Sh -Value $remoteArchive
+  $secretBytes = New-Object byte[] 48
+  $randomGenerator = [Security.Cryptography.RandomNumberGenerator]::Create()
+  try {
+    $randomGenerator.GetBytes($secretBytes)
+  } finally {
+    $randomGenerator.Dispose()
+  }
+  $authCookieSecret = [Convert]::ToBase64String($secretBytes)
+  $remoteCommand = @"
+set -e
+mkdir -p $remoteApiPathQuoted
+find $remoteApiPathQuoted -mindepth 1 -maxdepth 1 -not -name data -exec rm -rf -- {} + 2>/dev/null || true
+tar -xzf $remoteArchiveQuoted -C $remoteApiPathQuoted
+rm -f $remoteArchiveQuoted
+cd $remoteApiPathQuoted
+if command -v npm >/dev/null 2>&1; then npm install --omit=dev; else echo 'npm is required for FlexCraft auth API' >&2; exit 1; fi
+mkdir -p /var/lib/flexcraft-auth
+chmod 700 /var/lib/flexcraft-auth
+if [ ! -f /etc/flexcraft-auth.env ]; then
+  cat >/etc/flexcraft-auth.env <<EOF
+NODE_ENV=production
+PORT=3088
+HOST=127.0.0.1
+PUBLIC_ORIGIN=https://flex-craft.ru
+AUTH_DATA_DIR=/var/lib/flexcraft-auth
+AUTH_COOKIE_SECRET=$authCookieSecret
+AUTH_SESSION_COOKIE=flexcraft_session
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=
+SMTP_PASS=
+SMTP_FROM=FlexCraft <no-reply@flex-craft.ru>
+EOF
+  chmod 600 /etc/flexcraft-auth.env
+fi
+cat >/etc/systemd/system/flexcraft-auth.service <<'EOF'
+[Unit]
+Description=FlexCraft Auth API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/flexcraft-auth
+EnvironmentFile=/etc/flexcraft-auth.env
+ExecStart=/usr/bin/node $RemoteApiPath/src/server.js
+Restart=always
+RestartSec=5
+User=root
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+python3 - <<'PY'
+from pathlib import Path
+path = Path('/etc/nginx/sites-enabled/flexcraft')
+text = path.read_text()
+api_block = '''location /api/ {
+    proxy_pass http://127.0.0.1:3088/api/;
+    proxy_http_version 1.1;
+    proxy_set_header Host `$host;
+    proxy_set_header X-Real-IP `$remote_addr;
+    proxy_set_header X-Forwarded-For `$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto `$scheme;
+  }'''
+if 'proxy_pass http://127.0.0.1:3088/api/' not in text:
+    text = text.replace('location /api/ {\n    return 501;\n  }', api_block)
+path.write_text(text)
+PY
+systemctl daemon-reload
+systemctl enable flexcraft-auth >/dev/null
+systemctl restart flexcraft-auth
+if command -v nginx >/dev/null 2>&1; then nginx -t && systemctl reload nginx; fi
+systemctl --no-pager --full status flexcraft-auth | sed -n '1,18p'
+"@
+
+  Write-Host 'Installing api on VM...'
+  Invoke-Remote -Command $remoteCommand
+  Write-Host "Deployed api to $RemoteApiPath"
 }
 
 function Resolve-LocalPath {
@@ -132,7 +237,8 @@ function Invoke-Npm {
 function New-Archive {
   param(
     [Parameter(Mandatory = $true)][string]$SourceDir,
-    [Parameter(Mandatory = $true)][string]$Name
+    [Parameter(Mandatory = $true)][string]$Name,
+    [string[]]$Exclude = @()
   )
 
   if (-not (Test-Path -LiteralPath $SourceDir -PathType Container)) {
@@ -148,7 +254,13 @@ function New-Archive {
     Remove-Item -LiteralPath $archivePath -Force
   }
 
-  & tar -czf $archivePath -C $SourceDir .
+  $tarArgs = @('-czf', $archivePath)
+  foreach ($entry in $Exclude) {
+    $tarArgs += @('--exclude', $entry)
+  }
+  $tarArgs += @('-C', $SourceDir, '.')
+
+  & tar @tarArgs
   if ($LASTEXITCODE -ne 0) {
     throw "tar failed with exit code $LASTEXITCODE"
   }
@@ -165,13 +277,14 @@ function Deploy-Directory {
   param(
     [Parameter(Mandatory = $true)][string]$SourceDir,
     [Parameter(Mandatory = $true)][string]$RemoteDir,
-    [Parameter(Mandatory = $true)][string]$Label
+    [Parameter(Mandatory = $true)][string]$Label,
+    [string[]]$Exclude = @()
   )
 
   Assert-Tools
 
   $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-  $archivePath = New-Archive -SourceDir $SourceDir -Name "flexcraft-$Label-$stamp"
+  $archivePath = New-Archive -SourceDir $SourceDir -Name "flexcraft-$Label-$stamp" -Exclude $Exclude
   $remoteArchive = "/tmp/$(Split-Path -Leaf $archivePath)"
 
   Invoke-Remote -Command "find /tmp -maxdepth 1 -type f -name 'flexcraft-*.tgz' -delete 2>/dev/null || true"
@@ -183,7 +296,7 @@ function Deploy-Directory {
   $remoteArchiveQuoted = Quote-Sh -Value $remoteArchive
   $cleanCommand = 'true'
   if ($Label -eq 'site') {
-    $cleanCommand = "rm -rf $remoteDirQuoted/assets $remoteDirQuoted/client-mods $remoteDirQuoted/downloads $remoteDirQuoted/index.html"
+    $cleanCommand = "rm -rf $remoteDirQuoted/assets $remoteDirQuoted/client-mods $remoteDirQuoted/index.html"
   } elseif ($Label -eq 'downloads') {
     $cleanCommand = "find $remoteDirQuoted -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + 2>/dev/null || true"
   }
@@ -213,18 +326,22 @@ switch ($commandName) {
   }
   'site' {
     if (-not $SkipBuild) { Invoke-Npm -NpmArgs @('run', 'build') }
-    Deploy-Directory -SourceDir $distDir -RemoteDir $RemoteWebsitePath -Label 'site'
+    Deploy-Directory -SourceDir $distDir -RemoteDir $RemoteWebsitePath -Label 'site' -Exclude @('./downloads', './downloads/*')
   }
   'downloads' {
     if (-not $SkipBuild) { Invoke-Npm -NpmArgs @('run', 'package:win') }
     Deploy-Directory -SourceDir $downloadsDir -RemoteDir $RemoteDownloadsPath -Label 'downloads'
   }
+  'api' {
+    Deploy-Api
+  }
   'all' {
     if (-not $SkipBuild) { Invoke-Npm -NpmArgs @('run', 'package:win') }
-    Deploy-Directory -SourceDir $distDir -RemoteDir $RemoteWebsitePath -Label 'site'
+    Deploy-Api
+    Deploy-Directory -SourceDir $distDir -RemoteDir $RemoteWebsitePath -Label 'site' -Exclude @('./downloads', './downloads/*')
   }
   'existing' {
-    Deploy-Directory -SourceDir $distDir -RemoteDir $RemoteWebsitePath -Label 'site'
+    Deploy-Directory -SourceDir $distDir -RemoteDir $RemoteWebsitePath -Label 'site' -Exclude @('./downloads', './downloads/*')
   }
   default {
     Write-Error "Unknown command: $Command. Run .\deploy-vk-vm.cmd help"

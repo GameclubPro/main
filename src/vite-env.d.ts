@@ -21,12 +21,24 @@ interface AuthSession {
   accountId: string;
   login: string;
   username: string;
+  source?: 'local' | 'flexcraft';
+  email?: string;
+  emailVerified?: boolean;
 }
 
 interface AuthFormInput {
   login: string;
   username?: string;
   password: string;
+}
+
+interface LauncherDeviceStart {
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete?: string;
+  expiresIn: number;
+  interval: number;
 }
 
 interface LauncherProgress {
@@ -73,6 +85,9 @@ interface Window {
     registerTestAccount: (input: AuthFormInput) => Promise<LauncherSnapshot>;
     loginTestAccount: (input: AuthFormInput) => Promise<LauncherSnapshot>;
     logoutTestAccount: () => Promise<LauncherSnapshot>;
+    startAccountLink: () => Promise<LauncherDeviceStart>;
+    completeAccountLink: (deviceCode: string) => Promise<LauncherSnapshot>;
+    openExternal: (url: string) => Promise<void>;
     installLatestVanilla: () => Promise<LauncherSnapshot>;
     launchLatestVanilla: () => Promise<LauncherSnapshot>;
     openGameFolder: () => Promise<LauncherSnapshot>;

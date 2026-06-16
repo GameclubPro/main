@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AuthFormInput, LauncherConfig, LauncherSnapshot } from './launcherCore.js';
+import type { AuthFormInput, LauncherConfig, LauncherDeviceStart, LauncherSnapshot } from './launcherCore.js';
 
 const api = {
   platform: process.platform,
@@ -11,6 +11,10 @@ const api = {
   loginTestAccount: (input: AuthFormInput) =>
     ipcRenderer.invoke('launcher:loginTestAccount', input) as Promise<LauncherSnapshot>,
   logoutTestAccount: () => ipcRenderer.invoke('launcher:logoutTestAccount') as Promise<LauncherSnapshot>,
+  startAccountLink: () => ipcRenderer.invoke('launcher:startAccountLink') as Promise<LauncherDeviceStart>,
+  completeAccountLink: (deviceCode: string) =>
+    ipcRenderer.invoke('launcher:completeAccountLink', deviceCode) as Promise<LauncherSnapshot>,
+  openExternal: (url: string) => ipcRenderer.invoke('launcher:openExternal', url) as Promise<void>,
   installLatestVanilla: () => ipcRenderer.invoke('launcher:installLatestVanilla') as Promise<LauncherSnapshot>,
   launchLatestVanilla: () => ipcRenderer.invoke('launcher:launchLatestVanilla') as Promise<LauncherSnapshot>,
   openGameFolder: () => ipcRenderer.invoke('launcher:openGameFolder') as Promise<LauncherSnapshot>,

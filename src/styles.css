@@ -1151,6 +1151,215 @@ h2 {
   font-family: 'IBM Plex Mono', 'SFMono-Regular', ui-monospace, monospace;
 }
 
+.accountBand {
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 42px 0 62px;
+}
+
+.accountBandGrid {
+  display: grid;
+  grid-template-columns: minmax(320px, 430px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.siteAuthPanel,
+.accountInfoPanel {
+  display: grid;
+  gap: 14px;
+  padding: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.025)),
+    #0b1519;
+}
+
+.siteAuthPanel.compact {
+  padding: 16px;
+}
+
+.siteAuthPanel.standalone {
+  width: min(430px, 100%);
+}
+
+.authTabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-height: 44px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.authTabs button {
+  border-radius: 6px;
+  color: #c9d7da;
+  background: transparent;
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.authTabs button.active {
+  color: #071014;
+  background: #eaff79;
+}
+
+.authButton {
+  width: 100%;
+  border: 0;
+  cursor: pointer;
+}
+
+.authButton:disabled {
+  opacity: 0.62;
+  cursor: wait;
+}
+
+.authTextButton {
+  min-height: 34px;
+  color: #dbe6e9;
+  background: transparent;
+  cursor: pointer;
+  font-weight: 850;
+}
+
+.authIdentity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.authIdentity > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  color: #071014;
+  background: linear-gradient(135deg, #f1ff8b, #72e06f 64%, #8dd8ff);
+}
+
+.authIdentity strong,
+.authIdentity small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.authIdentity strong {
+  color: #ffffff;
+}
+
+.authIdentity small,
+.accountInfoPanel p,
+.accountInfoPanel li {
+  color: #bfccd1;
+}
+
+.authNote {
+  padding: 12px 14px;
+  border-radius: 8px;
+  line-height: 1.45;
+}
+
+.authNote.success {
+  border: 1px solid rgba(126, 224, 129, 0.24);
+  color: #e4ffe0;
+  background: rgba(31, 78, 34, 0.3);
+}
+
+.authNote.error {
+  border: 1px solid rgba(255, 143, 143, 0.26);
+  color: #ffd4d4;
+  background: rgba(78, 18, 18, 0.3);
+}
+
+.accountInfoPanel h3 {
+  margin: 0;
+  color: #ffffff;
+  font-size: 1.35rem;
+}
+
+.accountInfoPanel ul {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.accountInfoPanel li {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.accountInfoPanel svg {
+  flex: 0 0 auto;
+  color: #eaff79;
+}
+
+.authPageShell {
+  min-height: 100vh;
+  padding: 24px max(20px, calc((100vw - 1180px) / 2));
+  color: #f7fbff;
+  background:
+    linear-gradient(180deg, rgba(7, 11, 12, 0) 0, #071014 680px),
+    linear-gradient(140deg, #071014 0%, #111619 52%, #101914 100%);
+}
+
+.authPageShell > .brandMark {
+  margin-bottom: 46px;
+}
+
+.authPageGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 430px);
+  gap: 28px;
+  align-items: start;
+}
+
+.authPageIntro {
+  display: grid;
+  gap: 18px;
+  max-width: 680px;
+}
+
+.authPageIntro h1 {
+  font-size: 4.8rem;
+  line-height: 0.9;
+}
+
+.authPageIntro p {
+  color: #c6d3d7;
+  font-size: 1.1rem;
+  line-height: 1.6;
+}
+
+.authResult {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  padding: 18px;
+  text-align: center;
+}
+
+.authResult.success svg,
+.authResult.pending svg {
+  color: #eaff79;
+}
+
+.authResult.error svg {
+  color: #ff8f8f;
+}
+
 @media (max-width: 1120px) {
   .statusRow,
   .workspace,
@@ -1180,6 +1389,11 @@ h2 {
   }
 
   .connectGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .accountBandGrid,
+  .authPageGrid {
     grid-template-columns: 1fr;
   }
 
@@ -1308,7 +1522,8 @@ h2 {
   .siteHeroInner,
   .featureBand,
   .connectBand,
-  .downloadBand {
+  .downloadBand,
+  .accountBand {
     width: min(100% - 28px, 1180px);
   }
 
@@ -1368,6 +1583,10 @@ h2 {
     padding: 12px 0 60px;
   }
 
+  .accountBand {
+    padding: 20px 0 42px;
+  }
+
   .sectionIntro h2,
   .downloadPanel h2 {
     font-size: 1.9rem;
@@ -1375,6 +1594,18 @@ h2 {
 
   .downloadPanel {
     padding: 20px;
+  }
+
+  .authPageShell {
+    padding: 18px 14px;
+  }
+
+  .authPageShell > .brandMark {
+    margin-bottom: 34px;
+  }
+
+  .authPageIntro h1 {
+    font-size: 3rem;
   }
 }
 
@@ -1508,6 +1739,53 @@ h2 {
 .settingsFields {
   display: grid;
   gap: 12px;
+}
+
+.linkCodeBox {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid rgba(234, 255, 121, 0.18);
+  border-radius: 8px;
+  background: rgba(234, 255, 121, 0.08);
+}
+
+.linkCodeBox span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #eaff79;
+  font-weight: 850;
+}
+
+.linkCodeBox strong {
+  color: #ffffff;
+  font-family: 'IBM Plex Mono', 'SFMono-Regular', ui-monospace, monospace;
+  font-size: 1.55rem;
+  letter-spacing: 0;
+}
+
+.linkCodeBox small {
+  color: #b9c7cc;
+  line-height: 1.4;
+}
+
+.authDivider {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 10px;
+  align-items: center;
+  color: #9eafb6;
+  font-size: 0.78rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.authDivider::before,
+.authDivider::after {
+  content: '';
+  height: 1px;
+  background: rgba(255, 255, 255, 0.11);
 }
 
 .segmentedControl {
