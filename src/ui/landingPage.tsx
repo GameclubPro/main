@@ -6,7 +6,7 @@ import {
   FolderSync,
   Gamepad2,
   HardDriveDownload,
-  Mail,
+  Link,
   MonitorDown,
   Server,
   ShieldCheck,
@@ -35,8 +35,8 @@ const features = [
   },
   {
     icon: ShieldCheck,
-    title: 'Локальный профиль',
-    text: 'Профиль создается на компьютере без лишних сервисов.',
+    title: 'VK ID профиль',
+    text: 'Аккаунт создается через VK ID и подключается к лаунчеру через браузер.',
   },
 ];
 
@@ -195,16 +195,16 @@ export function LandingPage() {
         <div className="sectionIntro">
           <p className="siteEyebrow"><ShieldCheck size={15} /> Аккаунт FlexCraft</p>
           <h2>Один профиль для сайта и лаунчера.</h2>
-          <p>Создайте аккаунт через email и пароль. После подтверждения почты этот же профиль можно подключить в лаунчере.</p>
+          <p>Вход только через платформы: сейчас VK ID, дальше здесь появятся Telegram и MAX. В лаунчере профиль подключается через короткий код.</p>
         </div>
         <div className="accountBandGrid">
           <SiteAuthPanel />
           <div className="accountInfoPanel">
-            <span className="featureIcon"><Mail size={22} /></span>
-            <h3>Email-подтверждение</h3>
-            <p>После регистрации придёт ссылка. Аккаунт станет активным только после подтверждения, чтобы защитить ники и восстановление доступа.</p>
+            <span className="featureIcon"><Link size={22} /></span>
+            <h3>Привязки платформ</h3>
+            <p>Внутри одного профиля можно будет подключить несколько способов входа. Начинаем с VK ID, затем добавим Telegram и MAX.</p>
             <ul>
-              <li><Check size={17} /> Пароль хранится только как защищённый hash</li>
+              <li><Check size={17} /> Вход подтверждается на стороне выбранной платформы</li>
               <li><Check size={17} /> Сессия сайта хранится в HttpOnly cookie</li>
               <li><Check size={17} /> Лаунчер подключается через браузерный код</li>
             </ul>

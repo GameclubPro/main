@@ -14,13 +14,12 @@ import {
   Server,
   Settings,
   ShieldCheck,
-  UserPlus,
   UserRound,
 } from 'lucide-react';
 import { Component, type ErrorInfo, type ReactNode, useEffect, useMemo, useState } from 'react';
 import { LAUNCHER_VERSION } from '../launcherInfo';
 import { LandingPage } from './landingPage';
-import { LauncherLinkPage, ResetPasswordPage, VerifyEmailPage } from './siteAuth';
+import { LauncherLinkPage } from './siteAuth';
 
 const fallbackSnapshot: LauncherSnapshot = {
   config: {
@@ -50,7 +49,6 @@ const fallbackSnapshot: LauncherSnapshot = {
     logsDir: '',
     logs: [],
   },
-  accounts: [],
   session: null,
 };
 
@@ -102,12 +100,6 @@ function launchState(snapshot: LauncherSnapshot): string {
 export function App() {
   if (!window.launcher) {
     const pathName = window.location.pathname;
-    if (pathName === '/auth/verify-email') {
-      return <VerifyEmailPage />;
-    }
-    if (pathName === '/auth/reset-password') {
-      return <ResetPasswordPage />;
-    }
     if (pathName === '/launcher/link') {
       return <LauncherLinkPage />;
     }
@@ -150,8 +142,6 @@ class RendererErrorBoundary extends Component<{ children: ReactNode }, { message
 function LauncherApp() {
   const [snapshot, setSnapshot] = useState<LauncherSnapshot>(fallbackSnapshot);
   const [form, setForm] = useState<LauncherConfig>(fallbackSnapshot.config);
-  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
-  const [authForm, setAuthForm] = useState<AuthFormInput>({ login: '', username: '', password: '' });
   const [linkDevice, setLinkDevice] = useState<LauncherDeviceStart | null>(null);
   const [uiMessage, setUiMessage] = useState<string>('');
   const [savePending, setSavePending] = useState(false);
@@ -175,9 +165,6 @@ function LauncherApp() {
 
         setSnapshot(nextSnapshot);
         setForm(nextSnapshot.config);
-        if (!nextSnapshot.session && nextSnapshot.accounts.length === 0) {
-          setAuthMode('register');
-        }
       })
       .catch((error) => {
         if (mounted) {
@@ -204,7 +191,6 @@ function LauncherApp() {
   const hasSession = Boolean(snapshot.session);
   const launchDisabled = busy || snapshot.status.isLaunching || !hasSession;
   const installDisabled = busy || !hasSession;
-  const authSubmitDisabled = authPending || busy || !authForm.login.trim() || !authForm.password.trim();
   const mainStatus = launchState(snapshot);
   const statusText = snapshot.status.progress?.detail ?? snapshot.status.statusLine;
   const serverValue = form.serverAddress.trim() || 'flex-craft.ru:25565';
@@ -229,29 +215,6 @@ function LauncherApp() {
       setUiMessage(formatUiError(error));
     } finally {
       setSavePending(false);
-    }
-  };
-
-  const handleAuthSubmit = async () => {
-    if (!window.launcher) {
-      return;
-    }
-
-    setAuthPending(true);
-    try {
-      const nextSnapshot =
-        authMode === 'register'
-          ? await window.launcher.registerTestAccount(authForm)
-          : await window.launcher.loginTestAccount(authForm);
-      setSnapshot(nextSnapshot);
-      setForm(nextSnapshot.config);
-      setUiMessage(authMode === 'register' ? 'Профиль создан.' : 'Вход выполнен.');
-      setAuthMode('login');
-      setAuthForm({ login: '', username: '', password: '' });
-    } catch (error) {
-      setUiMessage(formatUiError(error));
-    } finally {
-      setAuthPending(false);
     }
   };
 
@@ -330,7 +293,7 @@ function LauncherApp() {
       return;
     }
 
-    const nextSnapshot = await window.launcher.logoutTestAccount();
+    const nextSnapshot = await window.launcher.logoutAccount();
     setSnapshot(nextSnapshot);
     setUiMessage('Вы вышли из профиля.');
   };
@@ -439,7 +402,7 @@ function LauncherApp() {
             <section className="authBox">
               <button className="primaryButton fullWidth" type="button" onClick={startAccountLink} disabled={authPending || busy}>
                 {authPending ? <LoaderCircle size={18} className="spin" /> : <ShieldCheck size={18} />}
-                Войти через сайт
+                Войти через VK ID
               </button>
 
               {linkDevice ? (
@@ -450,81 +413,7 @@ function LauncherApp() {
                 </div>
               ) : null}
 
-              <div className="authDivider"><span>Локальный профиль</span></div>
-
-              <div className="segmentedControl" role="tablist" aria-label="Профиль">
-                <button
-                  type="button"
-                  className={authMode === 'login' ? 'active' : ''}
-                  onClick={() => setAuthMode('login')}
-                >
-                  Войти
-                </button>
-                <button
-                  type="button"
-                  className={authMode === 'register' ? 'active' : ''}
-                  onClick={() => setAuthMode('register')}
-                >
-                  Создать
-                </button>
-              </div>
-
-              <label className="field">
-                <span><ShieldCheck size={16} /> Логин</span>
-                <input
-                  value={authForm.login}
-                  onChange={(event) => setAuthForm((current) => ({ ...current, login: event.target.value }))}
-                  placeholder="ivan"
-                />
-              </label>
-
-              {authMode === 'register' ? (
-                <label className="field">
-                  <span><UserRound size={16} /> Ник</span>
-                  <input
-                    value={authForm.username ?? ''}
-                    maxLength={16}
-                    onChange={(event) => setAuthForm((current) => ({ ...current, username: event.target.value }))}
-                    placeholder="Ivan"
-                  />
-                </label>
-              ) : null}
-
-              <label className="field">
-                <span>Пароль</span>
-                <input
-                  type="password"
-                  value={authForm.password}
-                  onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))}
-                  placeholder="••••••••"
-                />
-              </label>
-
-              <button className="primaryButton fullWidth" type="button" onClick={handleAuthSubmit} disabled={authSubmitDisabled}>
-                {authPending ? <LoaderCircle size={18} className="spin" /> : authMode === 'register' ? <UserPlus size={18} /> : <ShieldCheck size={18} />}
-                {authMode === 'register' ? 'Создать профиль' : 'Войти'}
-              </button>
-            </section>
-          ) : null}
-
-          {snapshot.accounts.length > 0 ? (
-            <section className="accountList" aria-label="Сохраненные профили">
-              <small>Профили</small>
-              {snapshot.accounts.map((account) => (
-                <button
-                  key={account.id}
-                  type="button"
-                  className={snapshot.session?.accountId === account.id ? 'accountItem active' : 'accountItem'}
-                  onClick={() => {
-                    setAuthMode('login');
-                    setAuthForm({ login: account.login, username: account.username, password: '' });
-                    setUiMessage('Введите пароль для выбранного профиля.');
-                  }}
-                >
-                  <span>{account.username}</span>
-                  <small>{account.login}</small>
-                </button>
-              ))}
+              <p className="authHint">Аккаунт создаётся через VK ID на сайте. Telegram и MAX подключим следующим шагом.</p>
             </section>
           ) : null}
         </aside>
@@ -571,7 +460,7 @@ function LauncherApp() {
             </button>
           </div>
 
-          {!snapshot.session ? <p className="quietNotice">Создайте профиль или войдите, чтобы запустить игру.</p> : null}
+          {!snapshot.session ? <p className="quietNotice">Войдите через VK ID, чтобы запустить игру.</p> : null}
           {snapshot.status.warning ? <p className="quietNotice">{snapshot.status.warning}</p> : null}
           {snapshot.status.lastError ? <p className="quietNotice error">{snapshot.status.lastError}</p> : null}
           {uiMessage ? <p className="quietNotice info">{uiMessage}</p> : null}

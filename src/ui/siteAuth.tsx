@@ -1,84 +1,110 @@
-import { Check, KeyRound, LoaderCircle, LogIn, Mail, RotateCcw, ShieldCheck, UserPlus } from 'lucide-react';
+import { Check, KeyRound, LoaderCircle, LockKeyhole, MessageCircle, Send, ShieldCheck, Unlink, UserRound } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { apiError, apiGet, apiPost, type FlexUser } from '../authClient';
+import { apiError, apiGet, apiPost, type AuthProvider, type FlexUser } from '../authClient';
 
-type AuthMode = 'login' | 'register' | 'forgot';
+const providerLabels: Record<string, string> = {
+  vk: 'VK ID',
+  telegram: 'Telegram',
+  max: 'MAX',
+};
+
+const providerIcons: Record<string, React.ElementType> = {
+  vk: MessageCircle,
+  telegram: Send,
+  max: ShieldCheck,
+};
 
 interface SiteAuthPanelProps {
   compact?: boolean;
 }
 
-function getQueryToken(): string {
-  return new URLSearchParams(window.location.search).get('token') ?? '';
+function currentReturnPath(): string {
+  return `${window.location.pathname}${window.location.search}${window.location.hash}` || '/#account';
+}
+
+function providerLoginUrl(provider: string): string {
+  const params = new URLSearchParams({ returnTo: currentReturnPath() });
+  return `/api/auth/${provider}/start?${params.toString()}`;
+}
+
+function providerLabel(provider: string): string {
+  return providerLabels[provider] ?? provider;
+}
+
+function displayName(user: FlexUser): string {
+  return user.displayName || user.nickname || user.login;
+}
+
+function providerIcon(provider: string) {
+  return providerIcons[provider] ?? ShieldCheck;
+}
+
+function ProviderButton({ provider, pending }: { provider: AuthProvider; pending: boolean }) {
+  const Icon = providerIcon(provider.id);
+
+  if (!provider.enabled) {
+    return (
+      <button className="providerButton disabled" type="button" disabled>
+        <Icon size={18} />
+        <span>{provider.label}</span>
+        <small>скоро</small>
+      </button>
+    );
+  }
+
+  return (
+    <a className="providerButton primary" href={providerLoginUrl(provider.id)} aria-disabled={pending}>
+      {pending ? <LoaderCircle size={18} className="spin" /> : <Icon size={18} />}
+      <span>Войти через {provider.label}</span>
+    </a>
+  );
 }
 
 export function SiteAuthPanel({ compact = false }: SiteAuthPanelProps) {
-  const [mode, setMode] = useState<AuthMode>('login');
   const [user, setUser] = useState<FlexUser | null>(null);
-  const [form, setForm] = useState({ login: '', nickname: '', email: '', password: '' });
+  const [providers, setProviders] = useState<AuthProvider[]>([]);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
     let mounted = true;
+    const params = new URLSearchParams(window.location.search);
+    const authError = params.get('auth_error');
+    if (authError) {
+      setError(authError);
+      params.delete('auth_error');
+      const clean = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}${window.location.hash}`;
+      window.history.replaceState(null, '', clean);
+    }
+
     void apiGet('/auth/me')
       .then((result) => {
         if (mounted) {
           setUser(result.user ?? null);
+          setProviders(result.providers ?? []);
         }
       })
-      .catch(() => {});
+      .catch((requestError) => {
+        if (mounted) {
+          setError(apiError(requestError));
+        }
+      });
     return () => {
       mounted = false;
     };
   }, []);
 
-  const canSubmit = useMemo(() => {
-    if (pending) {
-      return false;
+  const visibleProviders = useMemo(() => {
+    if (providers.length > 0) {
+      return providers;
     }
-    if (mode === 'forgot') {
-      return Boolean(form.email.trim());
-    }
-    if (mode === 'register') {
-      return Boolean(form.login.trim() && form.nickname.trim() && form.email.trim() && form.password.trim());
-    }
-    return Boolean(form.login.trim() && form.password.trim());
-  }, [form, mode, pending]);
-
-  const submit = async () => {
-    setPending(true);
-    setError('');
-    setMessage('');
-    try {
-      if (mode === 'register') {
-        const result = await apiPost('/auth/register', {
-          login: form.login,
-          nickname: form.nickname,
-          email: form.email,
-          password: form.password,
-        });
-        setUser(result.user ?? null);
-        setMessage(result.emailSent ? 'Письмо отправлено. Откройте ссылку из почты.' : 'Аккаунт создан. Ссылка подтверждения записана в лог сервера.');
-        setMode('login');
-      } else if (mode === 'forgot') {
-        await apiPost('/auth/request-password-reset', { email: form.email });
-        setMessage('Если email есть в базе, мы отправили ссылку для смены пароля.');
-      } else {
-        const result = await apiPost('/auth/login', {
-          loginOrEmail: form.login,
-          password: form.password,
-        });
-        setUser(result.user ?? null);
-        setMessage('Вы вошли в аккаунт FlexCraft.');
-      }
-    } catch (requestError) {
-      setError(apiError(requestError));
-    } finally {
-      setPending(false);
-    }
-  };
+    return [
+      { id: 'vk', label: 'VK ID', enabled: true },
+      { id: 'telegram', label: 'Telegram', enabled: false },
+      { id: 'max', label: 'MAX', enabled: false },
+    ];
+  }, [providers]);
 
   const logout = async () => {
     setPending(true);
@@ -95,16 +121,42 @@ export function SiteAuthPanel({ compact = false }: SiteAuthPanelProps) {
   };
 
   if (user) {
+    const linkedProviders = new Set(user.linkedProviders ?? user.identities?.map((identity) => identity.provider) ?? []);
     return (
       <section className={compact ? 'siteAuthPanel compact' : 'siteAuthPanel'}>
         <div className="authIdentity">
-          <span><ShieldCheck size={20} /></span>
+          {user.avatarUrl ? <img src={user.avatarUrl} alt="" /> : <span><UserRound size={20} /></span>}
           <div>
-            <strong>{user.nickname}</strong>
-            <small>{user.emailVerified ? user.email : 'Email ожидает подтверждения'}</small>
+            <strong>{displayName(user)}</strong>
+            <small>{linkedProviders.size > 0 ? `Вход: ${[...linkedProviders].map(providerLabel).join(', ')}` : user.login}</small>
           </div>
         </div>
+
+        <div className="linkedProviders" aria-label="Подключенные платформы">
+          {visibleProviders.map((provider) => {
+            const Icon = providerIcon(provider.id);
+            const linked = linkedProviders.has(provider.id);
+            if (!linked && provider.enabled) {
+              return (
+                <a className="providerStatus action" href={providerLoginUrl(provider.id)} key={provider.id} aria-disabled={pending}>
+                  {pending ? <LoaderCircle size={17} className="spin" /> : <Icon size={17} />}
+                  <span>{provider.label}</span>
+                  <small>подключить</small>
+                </a>
+              );
+            }
+            return (
+              <div className={linked ? 'providerStatus linked' : 'providerStatus'} key={provider.id}>
+                <Icon size={17} />
+                <span>{provider.label}</span>
+                <small>{linked ? 'подключено' : 'скоро'}</small>
+              </div>
+            );
+          })}
+        </div>
+
         <button className="secondaryCta authButton" type="button" onClick={logout} disabled={pending}>
+          {pending ? <LoaderCircle size={18} className="spin" /> : <Unlink size={18} />}
           Выйти
         </button>
         {message ? <p className="authNote success">{message}</p> : null}
@@ -115,118 +167,14 @@ export function SiteAuthPanel({ compact = false }: SiteAuthPanelProps) {
 
   return (
     <section className={compact ? 'siteAuthPanel compact' : 'siteAuthPanel'}>
-      <div className="authTabs" role="tablist" aria-label="Вход FlexCraft">
-        <button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => setMode('login')}>
-          Войти
-        </button>
-        <button type="button" className={mode === 'register' ? 'active' : ''} onClick={() => setMode('register')}>
-          Регистрация
-        </button>
+      <div className="authProviderStack">
+        {visibleProviders.map((provider) => (
+          <ProviderButton key={provider.id} provider={provider} pending={pending} />
+        ))}
       </div>
-
-      {mode === 'register' ? (
-        <label className="field">
-          <span><ShieldCheck size={16} /> Логин</span>
-          <input value={form.login} autoComplete="username" onChange={(event) => setForm((current) => ({ ...current, login: event.target.value }))} />
-        </label>
-      ) : null}
-
-      {mode === 'register' ? (
-        <label className="field">
-          <span><UserPlus size={16} /> Никнейм</span>
-          <input value={form.nickname} maxLength={16} autoComplete="nickname" onChange={(event) => setForm((current) => ({ ...current, nickname: event.target.value }))} />
-        </label>
-      ) : null}
-
-      {mode !== 'login' ? (
-        <label className="field">
-          <span><Mail size={16} /> Email</span>
-          <input type="email" value={form.email} autoComplete="email" onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} />
-        </label>
-      ) : (
-        <label className="field">
-          <span><ShieldCheck size={16} /> Логин или email</span>
-          <input value={form.login} autoComplete="username" onChange={(event) => setForm((current) => ({ ...current, login: event.target.value }))} />
-        </label>
-      )}
-
-      {mode !== 'forgot' ? (
-        <label className="field">
-          <span><KeyRound size={16} /> Пароль</span>
-          <input type="password" value={form.password} autoComplete={mode === 'register' ? 'new-password' : 'current-password'} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} />
-        </label>
-      ) : null}
-
-      <button className="primaryCta authButton" type="button" onClick={submit} disabled={!canSubmit}>
-        {pending ? <LoaderCircle size={18} className="spin" /> : mode === 'register' ? <UserPlus size={18} /> : mode === 'forgot' ? <RotateCcw size={18} /> : <LogIn size={18} />}
-        {mode === 'register' ? 'Создать аккаунт' : mode === 'forgot' ? 'Отправить ссылку' : 'Войти'}
-      </button>
-
-      <button className="authTextButton" type="button" onClick={() => setMode(mode === 'forgot' ? 'login' : 'forgot')}>
-        {mode === 'forgot' ? 'Вернуться ко входу' : 'Забыли пароль?'}
-      </button>
-
       {message ? <p className="authNote success">{message}</p> : null}
       {error ? <p className="authNote error">{error}</p> : null}
     </section>
-  );
-}
-
-export function VerifyEmailPage() {
-  const [state, setState] = useState<'pending' | 'success' | 'error'>('pending');
-  const [message, setMessage] = useState('Подтверждаем email...');
-
-  useEffect(() => {
-    const token = getQueryToken();
-    void apiGet(`/auth/verify-email?token=${encodeURIComponent(token)}`)
-      .then(() => {
-        setState('success');
-        setMessage('Email подтверждён. Теперь можно входить на сайте и в лаунчере.');
-      })
-      .catch((error) => {
-        setState('error');
-        setMessage(apiError(error));
-      });
-  }, []);
-
-  return <AuthResultPage state={state} title="Подтверждение email" message={message} />;
-}
-
-export function ResetPasswordPage() {
-  const [password, setPassword] = useState('');
-  const [pending, setPending] = useState(false);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
-
-  const submit = async () => {
-    setPending(true);
-    setMessage('');
-    setError('');
-    try {
-      await apiPost('/auth/reset-password', { token: getQueryToken(), password });
-      setMessage('Пароль обновлён. Теперь можно войти с новым паролем.');
-    } catch (requestError) {
-      setError(apiError(requestError));
-    } finally {
-      setPending(false);
-    }
-  };
-
-  return (
-    <AuthShell title="Новый пароль">
-      <section className="siteAuthPanel standalone">
-        <label className="field">
-          <span><KeyRound size={16} /> Новый пароль</span>
-          <input type="password" value={password} autoComplete="new-password" onChange={(event) => setPassword(event.target.value)} />
-        </label>
-        <button className="primaryCta authButton" type="button" disabled={pending || password.length < 10} onClick={submit}>
-          {pending ? <LoaderCircle size={18} className="spin" /> : <Check size={18} />}
-          Сохранить пароль
-        </button>
-        {message ? <p className="authNote success">{message}</p> : null}
-        {error ? <p className="authNote error">{error}</p> : null}
-      </section>
-    </AuthShell>
   );
 }
 
@@ -238,6 +186,15 @@ export function LauncherLinkPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const authError = params.get('auth_error');
+    if (authError) {
+      setError(authError);
+      params.delete('auth_error');
+      const clean = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}${window.location.hash}`;
+      window.history.replaceState(null, '', clean);
+    }
+
     void apiGet('/auth/me').then((result) => setUser(result.user ?? null)).catch(() => setUser(null));
   }, []);
 
@@ -261,9 +218,9 @@ export function LauncherLinkPage() {
       {user ? (
         <section className="siteAuthPanel standalone">
           <div className="authIdentity">
-            <span><ShieldCheck size={20} /></span>
+            {user.avatarUrl ? <img src={user.avatarUrl} alt="" /> : <span><ShieldCheck size={20} /></span>}
             <div>
-              <strong>{user.nickname}</strong>
+              <strong>{displayName(user)}</strong>
               <small>Введите код из лаунчера</small>
             </div>
           </div>
@@ -283,19 +240,6 @@ export function LauncherLinkPage() {
   );
 }
 
-function AuthResultPage({ state, title, message }: { state: 'pending' | 'success' | 'error'; title: string; message: string }) {
-  return (
-    <AuthShell title={title}>
-      <section className="siteAuthPanel standalone">
-        <div className={`authResult ${state}`}>
-          {state === 'pending' ? <LoaderCircle size={28} className="spin" /> : <Check size={28} />}
-          <p>{message}</p>
-        </div>
-      </section>
-    </AuthShell>
-  );
-}
-
 function AuthShell({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <main className="authPageShell">
@@ -305,9 +249,9 @@ function AuthShell({ title, children }: { title: string; children: React.ReactNo
       </a>
       <div className="authPageGrid">
         <section className="authPageIntro">
-          <p className="siteEyebrow"><ShieldCheck size={15} /> Аккаунт</p>
+          <p className="siteEyebrow"><LockKeyhole size={15} /> Аккаунт</p>
           <h1>{title}</h1>
-          <p>Единый профиль FlexCraft для сайта, лаунчера и будущих привязок VK, Telegram и MAX.</p>
+          <p>Единый профиль FlexCraft для сайта и лаунчера. Сейчас доступен VK ID, дальше сюда добавятся Telegram и MAX.</p>
         </section>
         {children}
       </div>

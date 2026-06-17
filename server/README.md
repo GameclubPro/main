@@ -1,16 +1,18 @@
 # FlexCraft Auth Server
 
-Production API for FlexCraft accounts.
+Production API for FlexCraft social login and launcher linking.
 
 ## Environment
 
 Copy `.env.example` to `/etc/flexcraft-auth.env` on the VM and set:
 
 - `AUTH_COOKIE_SECRET` to a long random value.
-- `SMTP_*` when real email delivery is ready.
 - `PUBLIC_ORIGIN=https://flex-craft.ru`.
+- `VK_CLIENT_ID` from the VK ID app.
+- `VK_CLIENT_SECRET` from the VK ID app if it is issued for the app.
+- `VK_REDIRECT_URI=https://flex-craft.ru/api/auth/vk/callback`.
 
-Without SMTP settings verification links are written to the server log. This is useful only for setup.
+The VK ID app must allow the same redirect URI.
 
 ## Run
 

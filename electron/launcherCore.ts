@@ -43,40 +43,15 @@ export interface LauncherConfig {
   preferredVersion: string;
 }
 
-export interface TestAccount {
-  id: string;
-  login: string;
-  username: string;
-  passwordHash: string;
-  createdAt: string;
-}
-
 export interface LauncherAccountFile {
-  accounts?: TestAccount[];
-  session?: AuthSession | null;
   launcherAuth?: StoredLauncherAuth | null;
-}
-
-export interface PublicTestAccount {
-  id: string;
-  login: string;
-  username: string;
-  createdAt: string;
 }
 
 export interface AuthSession {
   accountId: string;
   login: string;
   username: string;
-  source?: 'local' | 'flexcraft';
-  email?: string;
-  emailVerified?: boolean;
-}
-
-export interface AuthFormInput {
-  login: string;
-  username?: string;
-  password: string;
+  source?: 'flexcraft';
 }
 
 export interface StoredLauncherAuth {
@@ -89,8 +64,6 @@ export interface FlexCraftUser {
   id: string;
   login: string;
   nickname: string;
-  email?: string;
-  emailVerified?: boolean;
   createdAt?: string;
 }
 
@@ -140,14 +113,14 @@ export interface LauncherStatus {
 export interface LauncherSnapshot {
   config: LauncherConfig;
   status: LauncherStatus;
-  accounts: PublicTestAccount[];
   session: AuthSession | null;
 }
 
 interface LauncherPaths {
   rootDir: string;
   configPath: string;
-  accountsPath: string;
+  authPath: string;
+  legacyAccountsPath: string;
   cacheDir: string;
   manifestsDir: string;
   downloadsDir: string;
@@ -470,28 +443,13 @@ function formatError(error: unknown): string {
   return String(error);
 }
 
-function toPublicAccount(account: TestAccount): PublicTestAccount {
-  return {
-    id: account.id,
-    login: account.login,
-    username: account.username,
-    createdAt: account.createdAt,
-  };
-}
-
 function flexUserToSession(user: FlexCraftUser): AuthSession {
   return {
     accountId: user.id,
     login: user.login,
     username: sanitizeUsername(user.nickname || user.login),
     source: 'flexcraft',
-    email: coerceString(user.email).trim() || undefined,
-    emailVerified: Boolean(user.emailVerified),
   };
-}
-
-function hashPassword(password: string): string {
-  return createHash('sha256').update(password, 'utf8').digest('hex');
 }
 
 function sanitizeFlexCraftUser(raw: unknown): FlexCraftUser | null {
@@ -512,8 +470,6 @@ function sanitizeFlexCraftUser(raw: unknown): FlexCraftUser | null {
     id,
     login,
     nickname,
-    email: coerceString(user.email).trim() || undefined,
-    emailVerified: Boolean(user.emailVerified),
     createdAt: coerceString(user.createdAt).trim() || undefined,
   };
 }
@@ -535,57 +491,12 @@ function sanitizeStoredLauncherAuth(raw: unknown): StoredLauncherAuth | null {
   return { token, user, createdAt };
 }
 
-function createAccountId(login: string): string {
-  return createHash('sha1').update(login, 'utf8').digest('hex').slice(0, 16);
-}
-
-function sanitizeStoredAccount(account: unknown): TestAccount | null {
-  if (!account || typeof account !== 'object') {
-    return null;
-  }
-
-  const raw = account as Partial<TestAccount>;
-  const login = sanitizeLogin(raw.login);
-  const username = sanitizeUsername(raw.username);
-  const passwordHash = coerceString(raw.passwordHash).trim();
-  const createdAt = coerceString(raw.createdAt).trim() || new Date().toISOString();
-
-  if (login.length < 3 || username.length < 3 || !/^[a-f0-9]{64}$/i.test(passwordHash)) {
-    return null;
-  }
-
-  return {
-    id: coerceString(raw.id).trim() || createAccountId(login),
-    login,
-    username,
-    passwordHash,
-    createdAt,
-  };
-}
-
-function sanitizeStoredSession(session: unknown, accounts: TestAccount[], launcherAuth?: StoredLauncherAuth | null): AuthSession | null {
-  if (!session || typeof session !== 'object') {
-    return null;
-  }
-
-  const raw = session as Partial<AuthSession>;
-  if (raw.source === 'flexcraft' && launcherAuth?.user && raw.accountId === launcherAuth.user.id) {
+function sanitizeStoredSession(launcherAuth?: StoredLauncherAuth | null): AuthSession | null {
+  if (launcherAuth?.user) {
     return flexUserToSession(launcherAuth.user);
   }
 
-  const login = sanitizeLogin(raw.login);
-  const account = accounts.find((entry) => entry.login === login || entry.id === raw.accountId);
-
-  if (!account) {
-    return null;
-  }
-
-  return {
-    accountId: account.id,
-    login: account.login,
-    username: account.username,
-    source: 'local',
-  };
+  return null;
 }
 
 async function fetchApi<T>(pathName: string, options: { method?: string; body?: unknown; token?: string } = {}): Promise<T> {
@@ -1471,7 +1382,6 @@ export class LauncherService {
 
   private config: LauncherConfig = defaultConfig();
   private status: LauncherStatus;
-  private accounts: TestAccount[] = [];
   private session: AuthSession | null = null;
   private launcherAuth: StoredLauncherAuth | null = null;
   private versionIndex: VersionManifestIndex | null = null;
@@ -1494,7 +1404,8 @@ export class LauncherService {
     this.paths = {
       rootDir,
       configPath: path.join(rootDir, 'launcher-config.json'),
-      accountsPath: path.join(rootDir, 'accounts.json'),
+      authPath: path.join(rootDir, 'launcher-auth.json'),
+      legacyAccountsPath: path.join(rootDir, 'accounts.json'),
       cacheDir: path.join(rootDir, 'cache'),
       manifestsDir: path.join(rootDir, 'cache', 'manifests'),
       downloadsDir: path.join(rootDir, 'cache', 'downloads'),
@@ -1542,19 +1453,20 @@ export class LauncherService {
       await writeJsonFile(this.paths.configPath, this.config);
     }
 
-    if (await pathExists(this.paths.accountsPath)) {
+    const authPath = (await pathExists(this.paths.authPath)) ? this.paths.authPath : this.paths.legacyAccountsPath;
+    if (await pathExists(authPath)) {
       const stored = await this.readStartupJsonOrRestore<LauncherAccountFile>(
-        this.paths.accountsPath,
-        { accounts: [], session: null, launcherAuth: null },
-        'профили лаунчера',
+        authPath,
+        { launcherAuth: null },
+        'аккаунт лаунчера',
       );
-      this.accounts = Array.isArray(stored.accounts)
-        ? stored.accounts.map(sanitizeStoredAccount).filter((account): account is TestAccount => Boolean(account))
-        : [];
       this.launcherAuth = sanitizeStoredLauncherAuth(stored.launcherAuth);
-      this.session = sanitizeStoredSession(stored.session, this.accounts, this.launcherAuth);
+      this.session = sanitizeStoredSession(this.launcherAuth);
+      if (authPath === this.paths.legacyAccountsPath) {
+        await this.persistLauncherAuth();
+      }
     } else {
-      await this.persistAccounts();
+      await this.persistLauncherAuth();
     }
 
     await this.refreshLauncherAuthSession();
@@ -1573,7 +1485,6 @@ export class LauncherService {
         logs: [...this.status.logs],
         progress: this.status.progress ? { ...this.status.progress } : null,
       },
-      accounts: this.accounts.map(toPublicAccount),
       session: this.session ? { ...this.session } : null,
     };
   }
@@ -1588,78 +1499,7 @@ export class LauncherService {
     return this.getSnapshot();
   }
 
-  async registerTestAccount(input: AuthFormInput): Promise<LauncherSnapshot> {
-    const login = sanitizeLogin(input.login);
-    const username = sanitizeUsername(input.username || input.login);
-    const password = input.password.trim();
-
-    if (login.length < 3) {
-      throw new Error('Логин должен быть не короче 3 символов: латинские буквы, цифры, точка, нижнее подчеркивание или дефис.');
-    }
-
-    if (username.length < 3) {
-      throw new Error('Ник должен быть не короче 3 символов.');
-    }
-
-    if (password.length < 4) {
-      throw new Error('Пароль должен быть не короче 4 символов.');
-    }
-
-    if (this.accounts.some((account) => account.login === login)) {
-      throw new Error('Такой логин уже есть.');
-    }
-
-    if (this.accounts.some((account) => account.username.toLowerCase() === username.toLowerCase())) {
-      throw new Error('Этот ник уже занят.');
-    }
-
-    const account: TestAccount = {
-      id: createAccountId(login),
-      login,
-      username,
-      passwordHash: hashPassword(password),
-      createdAt: new Date().toISOString(),
-    };
-
-    this.accounts = [...this.accounts, account];
-    this.session = {
-      accountId: account.id,
-      login: account.login,
-      username: account.username,
-    };
-
-    this.syncConfigUsernameFromSession();
-    await this.persistAccounts();
-    await writeJsonFile(this.paths.configPath, this.config);
-    this.pushLog(`Создан профиль ${account.login}.`);
-    await this.refreshStatus();
-    return this.getSnapshot();
-  }
-
-  async loginTestAccount(input: AuthFormInput): Promise<LauncherSnapshot> {
-    const login = sanitizeLogin(input.login);
-    const password = input.password.trim();
-    const account = this.accounts.find((entry) => entry.login === login);
-
-    if (!account || account.passwordHash !== hashPassword(password)) {
-      throw new Error('Неверный логин или пароль.');
-    }
-
-    this.session = {
-      accountId: account.id,
-      login: account.login,
-      username: account.username,
-    };
-
-    this.syncConfigUsernameFromSession();
-    await this.persistAccounts();
-    await writeJsonFile(this.paths.configPath, this.config);
-    this.pushLog(`Вход выполнен: ${account.login}.`);
-    await this.refreshStatus();
-    return this.getSnapshot();
-  }
-
-  async logoutTestAccount(): Promise<LauncherSnapshot> {
+  async logoutAccount(): Promise<LauncherSnapshot> {
     if (this.session) {
       this.pushLog(`Выход из профиля: ${this.session.login}.`);
     }
@@ -1670,7 +1510,7 @@ export class LauncherService {
 
     this.session = null;
     this.launcherAuth = null;
-    await this.persistAccounts();
+    await this.persistLauncherAuth();
     await this.refreshStatus();
     return this.getSnapshot();
   }
@@ -1716,7 +1556,7 @@ export class LauncherService {
     };
     this.session = flexUserToSession(user);
     this.syncConfigUsernameFromSession();
-    await this.persistAccounts();
+    await this.persistLauncherAuth();
     await writeJsonFile(this.paths.configPath, this.config);
     await this.refreshStatus();
     this.pushLog(`Подключён аккаунт FlexCraft: ${user.login}.`);
@@ -1957,10 +1797,8 @@ export class LauncherService {
     }
   }
 
-  private async persistAccounts(): Promise<void> {
-    await writeJsonFile(this.paths.accountsPath, {
-      accounts: this.accounts,
-      session: this.session,
+  private async persistLauncherAuth(): Promise<void> {
+    await writeJsonFile(this.paths.authPath, {
       launcherAuth: this.launcherAuth,
     });
   }
@@ -1985,14 +1823,14 @@ export class LauncherService {
         user,
       };
       this.session = flexUserToSession(user);
-      await this.persistAccounts();
+      await this.persistLauncherAuth();
     } catch (error) {
       this.pushLog(`Сессия FlexCraft недоступна: ${formatError(error)}`);
       this.launcherAuth = null;
       if (this.session?.source === 'flexcraft') {
         this.session = null;
       }
-      await this.persistAccounts();
+      await this.persistLauncherAuth();
     }
   }
 

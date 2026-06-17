@@ -7,7 +7,6 @@ import {
   downloadFile,
   fetchJson,
   LauncherService,
-  type AuthFormInput,
   type LauncherConfig,
   type LauncherDeviceStart,
   type LauncherSnapshot,
@@ -514,9 +513,7 @@ const registerIpc = () => {
   });
   ipcMain.handle('launcher:getSnapshot', async () => requireService().getSnapshot());
   ipcMain.handle('launcher:saveConfig', async (_event, partial: Partial<LauncherConfig>) => requireService().saveConfig(partial));
-  ipcMain.handle('launcher:registerTestAccount', async (_event, input: AuthFormInput) => requireService().registerTestAccount(input));
-  ipcMain.handle('launcher:loginTestAccount', async (_event, input: AuthFormInput) => requireService().loginTestAccount(input));
-  ipcMain.handle('launcher:logoutTestAccount', async () => requireService().logoutTestAccount());
+  ipcMain.handle('launcher:logoutAccount', async () => requireService().logoutAccount());
   ipcMain.handle('launcher:startAccountLink', async () => requireService().startLauncherAccountLink() as Promise<LauncherDeviceStart>);
   ipcMain.handle('launcher:completeAccountLink', async (_event, deviceCode: string) => requireService().completeLauncherAccountLink(deviceCode));
   ipcMain.handle('launcher:openExternal', async (_event, url: string) => {

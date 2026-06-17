@@ -1,14 +1,11 @@
 import cookie from '@fastify/cookie';
 import Fastify from 'fastify';
-import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { promisify } from 'node:util';
-import nodemailer from 'nodemailer';
 
-const scrypt = promisify(scryptCallback);
 const isProduction = process.env.NODE_ENV === 'production';
 const port = Number(process.env.PORT || 3088);
 const host = process.env.HOST || '127.0.0.1';
@@ -19,10 +16,20 @@ const cookieName = process.env.AUTH_SESSION_COOKIE || 'flexcraft_session';
 const cookieSecret = process.env.AUTH_COOKIE_SECRET || '';
 const maxJsonBytes = 64 * 1024;
 const sessionMaxAgeSeconds = 60 * 60 * 24 * 30;
-const verifyTokenTtlMs = 1000 * 60 * 60 * 24;
-const passwordResetTtlMs = 1000 * 60 * 60;
 const launcherDeviceTtlMs = 1000 * 60 * 10;
 const launcherPollIntervalSeconds = 3;
+const oauthStateTtlMs = 1000 * 60 * 10;
+const vkClientId = String(process.env.VK_CLIENT_ID || process.env.VK_ID_CLIENT_ID || '').trim();
+const vkClientSecret = String(process.env.VK_CLIENT_SECRET || process.env.VK_ID_CLIENT_SECRET || '').trim();
+const vkRedirectUri = String(process.env.VK_REDIRECT_URI || `${publicOrigin}/api/auth/vk/callback`).trim();
+const vkBaseUrl = String(process.env.VK_OAUTH_BASE_URL || 'https://id.vk.ru').replace(/\/+$/, '');
+const vkScope = String(process.env.VK_SCOPE || 'vkid.personal_info').trim();
+
+const providerDefinitions = [
+  { id: 'vk', label: 'VK ID', enabled: () => Boolean(vkClientId) },
+  { id: 'telegram', label: 'Telegram', enabled: () => false },
+  { id: 'max', label: 'MAX', enabled: () => false },
+];
 
 if (isProduction && cookieSecret.length < 32) {
   throw new Error('AUTH_COOKIE_SECRET must be at least 32 characters in production.');
@@ -55,58 +62,209 @@ function sha256(value) {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
-function normalizeEmail(value) {
-  return String(value || '').trim().toLowerCase();
+function base64Url(buffer) {
+  return Buffer.from(buffer).toString('base64url');
 }
 
-function normalizeLogin(value) {
-  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9_.-]/g, '').slice(0, 32);
+function pkceChallenge(verifier) {
+  return base64Url(createHash('sha256').update(verifier, 'utf8').digest());
 }
 
 function normalizeNickname(value) {
   return String(value || '').trim().replace(/[^A-Za-z0-9_]/g, '').slice(0, 16);
 }
 
-function isValidEmail(value) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i.test(value) && value.length <= 254;
+function normalizeDisplayName(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').slice(0, 80);
 }
 
-function isValidLogin(value) {
-  return /^[a-z0-9_.-]{3,32}$/.test(value);
+function getProviderStatus() {
+  return providerDefinitions.map((provider) => ({
+    id: provider.id,
+    label: provider.label,
+    enabled: provider.enabled(),
+  }));
 }
 
-function isValidNickname(value) {
-  return /^[A-Za-z0-9_]{3,16}$/.test(value);
-}
-
-function validatePassword(value) {
-  const password = String(value || '');
-  if (password.length < 10) {
-    return 'Пароль должен быть не короче 10 символов.';
+function getSafeReturnPath(value) {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '/#account';
   }
-  if (password.length > 256) {
-    return 'Пароль слишком длинный.';
+
+  try {
+    const parsed = new URL(raw, publicOrigin);
+    if (parsed.origin !== publicOrigin) {
+      return '/#account';
+    }
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return raw.startsWith('/') && !raw.startsWith('//') ? raw : '/#account';
   }
-  return '';
 }
 
-function publicUser(user) {
+function getRequestReturnPath(request) {
+  return getSafeReturnPath(request.query?.returnTo || request.query?.next || request.headers.referer || '/#account');
+}
+
+function getProviderLogin(userId) {
+  return `id_${sha256(userId).slice(0, 12)}`;
+}
+
+function createNicknameCandidate(profile, providerUserId) {
+  const fromName = normalizeNickname(
+    [
+      profile.first_name,
+      profile.last_name,
+    ]
+      .filter(Boolean)
+      .join('_'),
+  );
+
+  if (fromName.length >= 3) {
+    return fromName;
+  }
+
+  return normalizeNickname(`${profile.provider}_${providerUserId}`) || 'FlexCraft';
+}
+
+function uniqueNickname(store, preferred, providerUserId) {
+  const base = normalizeNickname(preferred) || 'FlexCraft';
+  const used = new Set(store.users.map((user) => String(user.nickname || '').toLowerCase()));
+
+  if (base.length >= 3 && !used.has(base.toLowerCase())) {
+    return base;
+  }
+
+  const suffix = sha256(providerUserId).slice(0, 6);
+  const candidateBase = base.slice(0, Math.max(3, 16 - suffix.length - 1));
+  const withSuffix = `${candidateBase}_${suffix}`.slice(0, 16);
+
+  if (!used.has(withSuffix.toLowerCase())) {
+    return withSuffix;
+  }
+
+  for (let index = 2; index <= 99; index += 1) {
+    const nextSuffix = String(index);
+    const next = `${candidateBase.slice(0, Math.max(3, 16 - nextSuffix.length))}${nextSuffix}`;
+    if (!used.has(next.toLowerCase())) {
+      return next;
+    }
+  }
+
+  return `Player${randomToken(4)}`.slice(0, 16);
+}
+
+function profileDisplayName(profile) {
+  const displayName = normalizeDisplayName(profile.displayName);
+  if (displayName) {
+    return displayName;
+  }
+
+  const parts = [profile.first_name, profile.last_name].map(normalizeDisplayName).filter(Boolean);
+  return parts.join(' ') || `${profile.provider} ${profile.providerUserId}`;
+}
+
+function userHasProviderIdentity(store, userId) {
+  return store.identities.some((identity) => identity.userId === userId);
+}
+
+function upsertProviderIdentity(store, profile, linkedUserId = '') {
+  const providerUserId = String(profile.providerUserId || '').trim();
+  if (!providerUserId) {
+    throw new Error('Provider profile has no user id.');
+  }
+
+  let identity = store.identities.find(
+    (entry) => entry.provider === profile.provider && String(entry.providerUserId) === providerUserId,
+  );
+  let user = identity ? store.users.find((entry) => entry.id === identity.userId) : null;
+  const linkedUser = linkedUserId ? store.users.find((entry) => entry.id === linkedUserId) : null;
+  const displayName = profileDisplayName(profile);
+  const now = nowIso();
+
+  if (identity && linkedUser && identity.userId !== linkedUser.id) {
+    throw new Error(`${profile.provider.toUpperCase()} уже привязан к другому профилю.`);
+  }
+
+  if (!user) {
+    if (linkedUser) {
+      user = linkedUser;
+    } else {
+      const userId = randomToken(16);
+      const nickname = uniqueNickname(store, createNicknameCandidate(profile, providerUserId), `${profile.provider}:${providerUserId}`);
+      user = {
+        id: userId,
+        login: getProviderLogin(userId),
+        nickname,
+        displayName,
+        avatarUrl: profile.avatarUrl || '',
+        authSource: profile.provider,
+        createdAt: now,
+        updatedAt: now,
+      };
+      store.users.push(user);
+    }
+  }
+
+  if (!identity) {
+    identity = {
+      id: randomToken(12),
+      userId: user.id,
+      provider: profile.provider,
+      providerUserId,
+      createdAt: now,
+    };
+    store.identities.push(identity);
+  }
+
+  identity.displayName = displayName;
+  identity.avatarUrl = profile.avatarUrl || '';
+  identity.profileUrl = profile.profileUrl || '';
+  identity.raw = profile.raw || undefined;
+  identity.updatedAt = now;
+
+  user.displayName = user.displayName || displayName;
+  user.avatarUrl = user.avatarUrl || profile.avatarUrl || '';
+  user.lastLoginAt = now;
+  user.updatedAt = now;
+
+  return { user, identity };
+}
+
+function publicIdentity(identity) {
+  return {
+    provider: identity.provider,
+    providerUserId: identity.providerUserId,
+    displayName: identity.displayName || '',
+    avatarUrl: identity.avatarUrl || '',
+    profileUrl: identity.profileUrl || '',
+    linkedAt: identity.createdAt,
+    updatedAt: identity.updatedAt,
+  };
+}
+
+function publicUser(user, store = null) {
+  const identities = store?.identities?.filter((identity) => identity.userId === user.id).map(publicIdentity) || [];
   return {
     id: user.id,
     login: user.login,
     nickname: user.nickname,
-    email: user.email,
-    emailVerified: Boolean(user.emailVerified),
+    displayName: user.displayName || user.nickname,
+    avatarUrl: user.avatarUrl || identities.find((identity) => identity.avatarUrl)?.avatarUrl || '',
+    linkedProviders: identities.map((identity) => identity.provider),
+    identities,
     createdAt: user.createdAt,
   };
 }
 
 function createEmptyStore() {
   return {
-    version: 1,
+    version: 2,
     users: [],
+    identities: [],
     sessions: [],
-    emailTokens: [],
+    oauthStates: [],
     launcherDevices: [],
     audit: [],
   };
@@ -120,8 +278,9 @@ async function loadStore() {
       ...createEmptyStore(),
       ...parsed,
       users: Array.isArray(parsed.users) ? parsed.users : [],
+      identities: Array.isArray(parsed.identities) ? parsed.identities : [],
       sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
-      emailTokens: Array.isArray(parsed.emailTokens) ? parsed.emailTokens : [],
+      oauthStates: Array.isArray(parsed.oauthStates) ? parsed.oauthStates : [],
       launcherDevices: Array.isArray(parsed.launcherDevices) ? parsed.launcherDevices : [],
       audit: Array.isArray(parsed.audit) ? parsed.audit : [],
     };
@@ -157,85 +316,9 @@ async function mutateStore(mutator) {
 function cleanupStore(store) {
   const now = Date.now();
   store.sessions = store.sessions.filter((session) => Date.parse(session.expiresAt) > now);
-  store.emailTokens = store.emailTokens.filter((token) => Date.parse(token.expiresAt) > now);
+  store.oauthStates = store.oauthStates.filter((stateEntry) => Date.parse(stateEntry.expiresAt) > now);
   store.launcherDevices = store.launcherDevices.filter((device) => Date.parse(device.expiresAt) > now);
   store.audit = store.audit.slice(-500);
-}
-
-async function hashPassword(password) {
-  const salt = randomBytes(16).toString('base64url');
-  const key = await scrypt(password, salt, 64, { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
-  return `scrypt$32768$8$1$${salt}$${Buffer.from(key).toString('base64url')}`;
-}
-
-async function verifyPassword(password, encoded) {
-  const [kind, nValue, rValue, pValue, salt, expected] = String(encoded || '').split('$');
-  if (kind !== 'scrypt' || !salt || !expected) {
-    return false;
-  }
-
-  const expectedBuffer = Buffer.from(expected, 'base64url');
-  const key = await scrypt(password, salt, expectedBuffer.length, {
-    N: Number(nValue),
-    r: Number(rValue),
-    p: Number(pValue),
-    maxmem: 64 * 1024 * 1024,
-  });
-  const actualBuffer = Buffer.from(key);
-  return expectedBuffer.length === actualBuffer.length && timingSafeEqual(expectedBuffer, actualBuffer);
-}
-
-function createMailer() {
-  const hostName = process.env.SMTP_HOST;
-  if (!hostName) {
-    return null;
-  }
-
-  return nodemailer.createTransport({
-    host: hostName,
-    port: Number(process.env.SMTP_PORT || 587),
-    secure: String(process.env.SMTP_SECURE || '').toLowerCase() === 'true',
-    auth: process.env.SMTP_USER
-      ? {
-          user: process.env.SMTP_USER,
-          pass: process.env.SMTP_PASS || '',
-        }
-      : undefined,
-  });
-}
-
-const mailer = createMailer();
-
-async function sendEmail({ to, subject, text }) {
-  if (!mailer) {
-    app.log.warn({ to, subject, text }, 'SMTP is not configured; email content was logged instead.');
-    return;
-  }
-
-  await mailer.sendMail({
-    from: process.env.SMTP_FROM || 'FlexCraft <no-reply@flex-craft.ru>',
-    to,
-    subject,
-    text,
-  });
-}
-
-async function sendVerificationEmail(user, rawToken) {
-  const link = `${publicOrigin}/auth/verify-email?token=${encodeURIComponent(rawToken)}`;
-  await sendEmail({
-    to: user.email,
-    subject: 'Подтвердите email FlexCraft',
-    text: `Привет, ${user.nickname}!\n\nПодтвердите email для FlexCraft:\n${link}\n\nСсылка действует 24 часа.`,
-  });
-}
-
-async function sendPasswordResetEmail(user, rawToken) {
-  const link = `${publicOrigin}/auth/reset-password?token=${encodeURIComponent(rawToken)}`;
-  await sendEmail({
-    to: user.email,
-    subject: 'Восстановление пароля FlexCraft',
-    text: `Привет, ${user.nickname}!\n\nСсылка для смены пароля:\n${link}\n\nОна действует 1 час. Если вы не запрашивали смену пароля, просто игнорируйте письмо.`,
-  });
 }
 
 function setSessionCookie(reply, sessionToken) {
@@ -280,7 +363,10 @@ async function getSessionUser(request) {
   }
 
   const user = store.users.find((entry) => entry.id === session.userId);
-  return user ? { user, session } : null;
+  if (!user || !userHasProviderIdentity(store, user.id)) {
+    return null;
+  }
+  return { user, session };
 }
 
 async function createSession(store, user, meta = {}) {
@@ -316,6 +402,81 @@ function badRequest(reply, message) {
   return reply.code(400).send({ ok: false, error: message });
 }
 
+function requireVkConfig(reply) {
+  if (!vkClientId) {
+    return reply.code(503).send({ ok: false, error: 'VK ID пока не настроен на сервере.' });
+  }
+  return null;
+}
+
+function redirectWithError(reply, message, returnTo = '/#account') {
+  const url = new URL(getSafeReturnPath(returnTo), publicOrigin);
+  url.searchParams.set('auth_error', message);
+  return reply.redirect(url.toString());
+}
+
+async function vkFetchJson(url, body) {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': 'flexcraft-auth/1.0',
+    },
+    body,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.error) {
+    const details = payload.error_description || payload.error || `VK ID HTTP ${response.status}`;
+    const error = new Error(String(details));
+    error.payload = payload;
+    throw error;
+  }
+  return payload;
+}
+
+async function exchangeVkCode({ code, deviceId, codeVerifier, state }) {
+  const body = new URLSearchParams({
+    grant_type: 'authorization_code',
+    code,
+    redirect_uri: vkRedirectUri,
+    client_id: vkClientId,
+    code_verifier: codeVerifier,
+    state,
+    device_id: deviceId,
+  });
+  if (vkClientSecret) {
+    body.set('client_secret', vkClientSecret);
+  }
+  return vkFetchJson(`${vkBaseUrl}/oauth2/auth`, body);
+}
+
+async function fetchVkProfile(accessToken) {
+  const body = new URLSearchParams({ client_id: vkClientId, access_token: accessToken });
+  const result = await vkFetchJson(`${vkBaseUrl}/oauth2/user_info`, body);
+  const user = result.user || {};
+  const providerUserId = String(user.user_id || user.id || result.user_id || '').trim();
+  if (!providerUserId) {
+    throw new Error('VK ID не вернул идентификатор пользователя.');
+  }
+
+  return {
+    provider: 'vk',
+    providerUserId,
+    first_name: user.first_name,
+    last_name: user.last_name,
+    displayName: [user.first_name, user.last_name].map(normalizeDisplayName).filter(Boolean).join(' '),
+    avatarUrl: String(user.avatar || user.photo || user.photo_200 || '').trim(),
+    profileUrl: `https://vk.com/id${providerUserId}`,
+    raw: {
+      user_id: providerUserId,
+      first_name: user.first_name,
+      last_name: user.last_name,
+      avatar: user.avatar || user.photo || user.photo_200 || '',
+    },
+  };
+}
+
 app.addHook('onRequest', async (request, reply) => {
   if (request.method === 'OPTIONS') {
     reply
@@ -334,92 +495,115 @@ app.addHook('onSend', async (_request, reply) => {
 
 app.get('/api/health', async () => ({ ok: true, hostname: os.hostname(), time: nowIso() }));
 
-app.get('/api/auth/me', async (request) => {
+app.get('/api/auth/providers', async () => ({ ok: true, providers: getProviderStatus() }));
+
+app.get('/api/auth/me', async (request, reply) => {
   const session = await getSessionUser(request);
-  return { ok: true, user: session ? publicUser(session.user) : null };
+  if (!session?.user) {
+    clearSessionCookie(reply);
+    return { ok: true, user: null, providers: getProviderStatus() };
+  }
+
+  const store = await loadStore();
+  cleanupStore(store);
+  const user = store.users.find((entry) => entry.id === session.user.id) || session.user;
+  return { ok: true, user: publicUser(user, store), providers: getProviderStatus() };
 });
 
-app.post('/api/auth/register', async (request, reply) => {
-  const login = normalizeLogin(request.body?.login);
-  const nickname = normalizeNickname(request.body?.nickname);
-  const email = normalizeEmail(request.body?.email);
-  const password = String(request.body?.password || '');
-  const passwordError = validatePassword(password);
-
-  if (!isValidLogin(login)) {
-    return badRequest(reply, 'Логин должен быть 3-32 символа: латиница, цифры, точка, дефис или подчёркивание.');
-  }
-  if (!isValidNickname(nickname)) {
-    return badRequest(reply, 'Ник должен быть 3-16 символов: латиница, цифры или подчёркивание.');
-  }
-  if (!isValidEmail(email)) {
-    return badRequest(reply, 'Введите корректный email.');
-  }
-  if (passwordError) {
-    return badRequest(reply, passwordError);
+app.get('/api/auth/vk/start', async (request, reply) => {
+  const configError = requireVkConfig(reply);
+  if (configError) {
+    return configError;
   }
 
-  return mutateStore(async (store) => {
-    if (store.users.some((user) => user.login === login)) {
-      return reply.code(409).send({ ok: false, error: 'Такой логин уже занят.' });
-    }
-    if (store.users.some((user) => user.email === email)) {
-      return reply.code(409).send({ ok: false, error: 'Этот email уже используется.' });
-    }
-    if (store.users.some((user) => user.nickname.toLowerCase() === nickname.toLowerCase())) {
-      return reply.code(409).send({ ok: false, error: 'Такой ник уже занят.' });
-    }
-
-    const user = {
-      id: randomToken(16),
-      login,
-      nickname,
-      email,
-      emailVerified: false,
-      passwordHash: await hashPassword(password),
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
-    };
-    const rawToken = randomToken(32);
-    store.users.push(user);
-    store.emailTokens.push({
+  const state = randomToken(32);
+  const codeVerifier = randomToken(64);
+  const returnTo = getRequestReturnPath(request);
+  const session = await getSessionUser(request);
+  await mutateStore(async (store) => {
+    store.oauthStates.push({
       id: randomToken(8),
-      userId: user.id,
-      type: 'verify-email',
-      tokenHash: sha256(rawToken),
+      provider: 'vk',
+      stateHash: sha256(state),
+      codeVerifier,
+      returnTo,
+      linkUserId: session?.user?.id || '',
       createdAt: nowIso(),
-      expiresAt: isoIn(verifyTokenTtlMs),
+      expiresAt: isoIn(oauthStateTtlMs),
     });
-    addAudit(store, 'auth.register', request, { userId: user.id });
-    await sendVerificationEmail(user, rawToken);
-    return reply.code(201).send({ ok: true, user: publicUser(user), emailSent: Boolean(mailer) });
+    addAudit(store, 'auth.vk_start', request, { linkUserId: session?.user?.id || '' });
   });
+
+  const authorizeUrl = new URL(`${vkBaseUrl}/authorize`);
+  authorizeUrl.searchParams.set('response_type', 'code');
+  authorizeUrl.searchParams.set('client_id', vkClientId);
+  authorizeUrl.searchParams.set('app_id', vkClientId);
+  authorizeUrl.searchParams.set('redirect_uri', vkRedirectUri);
+  authorizeUrl.searchParams.set('state', state);
+  authorizeUrl.searchParams.set('code_challenge', pkceChallenge(codeVerifier));
+  authorizeUrl.searchParams.set('code_challenge_method', 'S256');
+  authorizeUrl.searchParams.set('scope', vkScope);
+  authorizeUrl.searchParams.set('vk_id_provider', 'vkid');
+  authorizeUrl.searchParams.set('prompt', 'select_account');
+  authorizeUrl.searchParams.set('lang_id', '0');
+
+  return reply.redirect(authorizeUrl.toString());
 });
 
-app.post('/api/auth/login', async (request, reply) => {
-  const identity = String(request.body?.loginOrEmail || request.body?.login || '').trim().toLowerCase();
-  const password = String(request.body?.password || '');
-
-  if (!identity || !password) {
-    return badRequest(reply, 'Введите логин/email и пароль.');
+app.get('/api/auth/vk/callback', async (request, reply) => {
+  const configError = requireVkConfig(reply);
+  if (configError) {
+    return configError;
   }
 
-  return mutateStore(async (store) => {
-    const user = store.users.find((entry) => entry.login === identity || entry.email === identity);
-    if (!user || !(await verifyPassword(password, user.passwordHash))) {
-      addAudit(store, 'auth.login_failed', request, { identity });
-      return reply.code(401).send({ ok: false, error: 'Неверный логин или пароль.' });
-    }
-    if (!user.emailVerified) {
-      return reply.code(403).send({ ok: false, error: 'Сначала подтвердите email.' });
-    }
+  const code = String(request.query?.code || '').trim();
+  const state = String(request.query?.state || '').trim();
+  const deviceId = String(request.query?.device_id || '').trim();
+  const oauthError = String(request.query?.error_description || request.query?.error || '').trim();
 
-    user.lastLoginAt = nowIso();
-    const sessionToken = await createSession(store, user, { kind: 'web' });
-    addAudit(store, 'auth.login', request, { userId: user.id });
-    setSessionCookie(reply, sessionToken);
-    return reply.send({ ok: true, user: publicUser(user) });
-  });
+  if (oauthError) {
+    return redirectWithError(reply, oauthError);
+  }
+  if (!code || !state || !deviceId) {
+    return redirectWithError(reply, 'VK ID вернул неполный ответ.');
+  }
+
+  const stateHash = sha256(state);
+  const store = await loadStore();
+  cleanupStore(store);
+  const stateEntry = store.oauthStates.find((entry) => entry.provider === 'vk' && entry.stateHash === stateHash);
+  if (!stateEntry || Date.parse(stateEntry.expiresAt) <= Date.now()) {
+    return redirectWithError(reply, 'Сессия входа VK устарела. Попробуйте ещё раз.');
+  }
+
+  try {
+    const tokenResult = await exchangeVkCode({
+      code,
+      deviceId,
+      codeVerifier: stateEntry.codeVerifier,
+      state,
+    });
+    const profile = await fetchVkProfile(tokenResult.access_token);
+
+    return mutateStore(async (nextStore) => {
+      nextStore.oauthStates = nextStore.oauthStates.filter((entry) => entry.id !== stateEntry.id);
+      const { user, identity } = upsertProviderIdentity(nextStore, profile, stateEntry.linkUserId || '');
+      const sessionToken = await createSession(nextStore, user, { kind: 'web', provider: 'vk' });
+      addAudit(nextStore, stateEntry.linkUserId ? 'auth.vk_link' : 'auth.vk_login', request, {
+        userId: user.id,
+        identityId: identity.id,
+      });
+      setSessionCookie(reply, sessionToken);
+      return reply.redirect(new URL(getSafeReturnPath(stateEntry.returnTo), publicOrigin).toString());
+    });
+  } catch (error) {
+    app.log.warn({ error: error.message, payload: error.payload }, 'VK ID callback failed.');
+    await mutateStore(async (nextStore) => {
+      nextStore.oauthStates = nextStore.oauthStates.filter((entry) => entry.id !== stateEntry.id);
+      addAudit(nextStore, 'auth.vk_failed', request, { error: error.message });
+    });
+    return redirectWithError(reply, 'Не удалось войти через VK. Попробуйте ещё раз.', stateEntry.returnTo);
+  }
 });
 
 app.post('/api/auth/logout', async (request, reply) => {
@@ -431,118 +615,6 @@ app.post('/api/auth/logout', async (request, reply) => {
   });
   clearSessionCookie(reply);
   return { ok: true };
-});
-
-app.post('/api/auth/resend-verification', async (request, reply) => {
-  const email = normalizeEmail(request.body?.email);
-  if (!isValidEmail(email)) {
-    return badRequest(reply, 'Введите корректный email.');
-  }
-
-  await mutateStore(async (store) => {
-    const user = store.users.find((entry) => entry.email === email);
-    if (!user || user.emailVerified) {
-      return;
-    }
-
-    const rawToken = randomToken(32);
-    store.emailTokens.push({
-      id: randomToken(8),
-      userId: user.id,
-      type: 'verify-email',
-      tokenHash: sha256(rawToken),
-      createdAt: nowIso(),
-      expiresAt: isoIn(verifyTokenTtlMs),
-    });
-    await sendVerificationEmail(user, rawToken);
-  });
-
-  return { ok: true };
-});
-
-app.get('/api/auth/verify-email', async (request, reply) => {
-  const token = String(request.query?.token || '');
-  if (!token) {
-    return badRequest(reply, 'Нет токена подтверждения.');
-  }
-
-  return mutateStore(async (store) => {
-    const tokenHash = sha256(token);
-    const tokenEntry = store.emailTokens.find((entry) => entry.type === 'verify-email' && entry.tokenHash === tokenHash);
-    if (!tokenEntry || Date.parse(tokenEntry.expiresAt) <= Date.now()) {
-      return reply.code(400).send({ ok: false, error: 'Ссылка подтверждения устарела или уже использована.' });
-    }
-
-    const user = store.users.find((entry) => entry.id === tokenEntry.userId);
-    if (!user) {
-      return reply.code(400).send({ ok: false, error: 'Пользователь не найден.' });
-    }
-
-    user.emailVerified = true;
-    user.updatedAt = nowIso();
-    store.emailTokens = store.emailTokens.filter((entry) => entry.id !== tokenEntry.id);
-    const sessionToken = await createSession(store, user, { kind: 'web' });
-    addAudit(store, 'auth.verify_email', request, { userId: user.id });
-    setSessionCookie(reply, sessionToken);
-    return reply.send({ ok: true, user: publicUser(user) });
-  });
-});
-
-app.post('/api/auth/request-password-reset', async (request, reply) => {
-  const email = normalizeEmail(request.body?.email);
-  if (!isValidEmail(email)) {
-    return badRequest(reply, 'Введите корректный email.');
-  }
-
-  await mutateStore(async (store) => {
-    const user = store.users.find((entry) => entry.email === email && entry.emailVerified);
-    if (!user) {
-      return;
-    }
-    const rawToken = randomToken(32);
-    store.emailTokens.push({
-      id: randomToken(8),
-      userId: user.id,
-      type: 'reset-password',
-      tokenHash: sha256(rawToken),
-      createdAt: nowIso(),
-      expiresAt: isoIn(passwordResetTtlMs),
-    });
-    await sendPasswordResetEmail(user, rawToken);
-  });
-
-  return { ok: true };
-});
-
-app.post('/api/auth/reset-password', async (request, reply) => {
-  const token = String(request.body?.token || '');
-  const password = String(request.body?.password || '');
-  const passwordError = validatePassword(password);
-  if (!token) {
-    return badRequest(reply, 'Нет токена восстановления.');
-  }
-  if (passwordError) {
-    return badRequest(reply, passwordError);
-  }
-
-  return mutateStore(async (store) => {
-    const tokenHash = sha256(token);
-    const tokenEntry = store.emailTokens.find((entry) => entry.type === 'reset-password' && entry.tokenHash === tokenHash);
-    if (!tokenEntry || Date.parse(tokenEntry.expiresAt) <= Date.now()) {
-      return reply.code(400).send({ ok: false, error: 'Ссылка восстановления устарела или уже использована.' });
-    }
-    const user = store.users.find((entry) => entry.id === tokenEntry.userId);
-    if (!user) {
-      return reply.code(400).send({ ok: false, error: 'Пользователь не найден.' });
-    }
-
-    user.passwordHash = await hashPassword(password);
-    user.updatedAt = nowIso();
-    store.emailTokens = store.emailTokens.filter((entry) => entry.id !== tokenEntry.id);
-    store.sessions = store.sessions.filter((session) => session.userId !== user.id);
-    addAudit(store, 'auth.reset_password', request, { userId: user.id });
-    return reply.send({ ok: true });
-  });
 });
 
 app.post('/api/launcher/device/start', async (request) => {
@@ -619,7 +691,7 @@ app.post('/api/launcher/device/poll', async (request, reply) => {
     }
 
     const user = store.users.find((entry) => entry.id === device.userId);
-    if (!user) {
+    if (!user || !userHasProviderIdentity(store, user.id)) {
       return reply.code(400).send({ ok: false, status: 'denied', error: 'Пользователь не найден.' });
     }
 
@@ -627,7 +699,7 @@ app.post('/api/launcher/device/poll', async (request, reply) => {
     device.status = 'used';
     device.usedAt = nowIso();
     addAudit(store, 'launcher.device_complete', request, { userId: user.id });
-    return reply.send({ ok: true, status: 'approved', token: launcherToken, user: publicUser(user) });
+    return reply.send({ ok: true, status: 'approved', token: launcherToken, user: publicUser(user, store) });
   });
 });
 
@@ -641,11 +713,11 @@ app.post('/api/launcher/session/me', async (request, reply) => {
   cleanupStore(store);
   const session = store.sessions.find((entry) => entry.kind === 'launcher' && entry.tokenHash === sha256(bearer));
   const user = session ? store.users.find((entry) => entry.id === session.userId) : null;
-  if (!user) {
+  if (!user || !userHasProviderIdentity(store, user.id)) {
     return reply.code(401).send({ ok: false, error: 'Сессия лаунчера истекла.' });
   }
 
-  return { ok: true, user: publicUser(user) };
+  return { ok: true, user: publicUser(user, store) };
 });
 
 app.post('/api/launcher/session/logout', async (request) => {

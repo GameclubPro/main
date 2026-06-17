@@ -2,16 +2,34 @@ export interface FlexUser {
   id: string;
   login: string;
   nickname: string;
-  email: string;
-  emailVerified: boolean;
+  displayName?: string;
+  avatarUrl?: string;
+  linkedProviders?: string[];
+  identities?: FlexIdentity[];
   createdAt: string;
+}
+
+export interface FlexIdentity {
+  provider: string;
+  providerUserId: string;
+  displayName?: string;
+  avatarUrl?: string;
+  profileUrl?: string;
+  linkedAt?: string;
+  updatedAt?: string;
+}
+
+export interface AuthProvider {
+  id: string;
+  label: string;
+  enabled: boolean;
 }
 
 export interface ApiResult<T = unknown> {
   ok: boolean;
   error?: string;
   user?: FlexUser | null;
-  emailSent?: boolean;
+  providers?: AuthProvider[];
   status?: string;
   token?: string;
   deviceCode?: string;

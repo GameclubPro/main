@@ -103,15 +103,19 @@ PUBLIC_ORIGIN=https://flex-craft.ru
 AUTH_DATA_DIR=/var/lib/flexcraft-auth
 AUTH_COOKIE_SECRET=$authCookieSecret
 AUTH_SESSION_COOKIE=flexcraft_session
-SMTP_HOST=
-SMTP_PORT=587
-SMTP_SECURE=false
-SMTP_USER=
-SMTP_PASS=
-SMTP_FROM=FlexCraft <no-reply@flex-craft.ru>
+VK_CLIENT_ID=
+VK_CLIENT_SECRET=
+VK_REDIRECT_URI=https://flex-craft.ru/api/auth/vk/callback
+VK_OAUTH_BASE_URL=https://id.vk.ru
+VK_SCOPE=vkid.personal_info
 EOF
   chmod 600 /etc/flexcraft-auth.env
 fi
+grep -q '^VK_CLIENT_ID=' /etc/flexcraft-auth.env || echo 'VK_CLIENT_ID=' >>/etc/flexcraft-auth.env
+grep -q '^VK_CLIENT_SECRET=' /etc/flexcraft-auth.env || echo 'VK_CLIENT_SECRET=' >>/etc/flexcraft-auth.env
+grep -q '^VK_REDIRECT_URI=' /etc/flexcraft-auth.env || echo 'VK_REDIRECT_URI=https://flex-craft.ru/api/auth/vk/callback' >>/etc/flexcraft-auth.env
+grep -q '^VK_OAUTH_BASE_URL=' /etc/flexcraft-auth.env || echo 'VK_OAUTH_BASE_URL=https://id.vk.ru' >>/etc/flexcraft-auth.env
+grep -q '^VK_SCOPE=' /etc/flexcraft-auth.env || echo 'VK_SCOPE=vkid.personal_info' >>/etc/flexcraft-auth.env
 cat >/etc/systemd/system/flexcraft-auth.service <<'EOF'
 [Unit]
 Description=FlexCraft Auth API
@@ -307,6 +311,48 @@ function Deploy-Directory {
   Write-Host "Deployed $Label to $RemoteDir"
 }
 
+function Deploy-Downloads {
+  Assert-Tools
+
+  if (-not (Test-Path -LiteralPath $downloadsDir -PathType Container)) {
+    throw "Downloads directory was not found: $downloadsDir"
+  }
+
+  $files = @(
+    'FlexCraft-Launcher-latest-win-x64.exe',
+    'FlexCraft-Launcher-latest-win-x64.zip',
+    'FlexCraft-Launcher-latest-portable-win-x64.exe',
+    'latest.json'
+  )
+
+  foreach ($file in $files) {
+    $localPath = Join-Path $downloadsDir $file
+    if (-not (Test-Path -LiteralPath $localPath -PathType Leaf)) {
+      throw "Download artifact was not found: $localPath"
+    }
+  }
+
+  $remoteDownloadsPathQuoted = Quote-Sh -Value $RemoteDownloadsPath
+  Invoke-Remote -Command "set -e; mkdir -p $remoteDownloadsPathQuoted; chown www-data:www-data $remoteDownloadsPathQuoted 2>/dev/null || true; chmod 755 $remoteDownloadsPathQuoted"
+
+  $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+  foreach ($file in $files) {
+    $localPath = Join-Path $downloadsDir $file
+    $remoteTemp = "$RemoteDownloadsPath/.upload-$stamp-$file"
+    $remoteFinal = "$RemoteDownloadsPath/$file"
+
+    Write-Host "Uploading $file..."
+    Copy-ToRemote -LocalPath $localPath -RemotePath $remoteTemp
+
+    $remoteTempQuoted = Quote-Sh -Value $remoteTemp
+    $remoteFinalQuoted = Quote-Sh -Value $remoteFinal
+    Invoke-Remote -Command "set -e; mv -f $remoteTempQuoted $remoteFinalQuoted; chown www-data:www-data $remoteFinalQuoted 2>/dev/null || true; chmod 644 $remoteFinalQuoted"
+  }
+
+  Invoke-Remote -Command "if command -v nginx >/dev/null 2>&1; then nginx -t >/dev/null 2>&1 && systemctl reload nginx || true; fi"
+  Write-Host "Deployed downloads to $RemoteDownloadsPath"
+}
+
 function Test-DeployAccess {
   Assert-Tools
   Invoke-Remote -Command "set -e; whoami; mkdir -p $(Quote-Sh -Value $RemoteWebsitePath) $(Quote-Sh -Value $RemoteDownloadsPath); test -w $(Quote-Sh -Value $RemoteWebsitePath); test -w $(Quote-Sh -Value $RemoteDownloadsPath)"
@@ -330,7 +376,7 @@ switch ($commandName) {
   }
   'downloads' {
     if (-not $SkipBuild) { Invoke-Npm -NpmArgs @('run', 'package:win') }
-    Deploy-Directory -SourceDir $downloadsDir -RemoteDir $RemoteDownloadsPath -Label 'downloads'
+    Deploy-Downloads
   }
   'api' {
     Deploy-Api
@@ -339,6 +385,7 @@ switch ($commandName) {
     if (-not $SkipBuild) { Invoke-Npm -NpmArgs @('run', 'package:win') }
     Deploy-Api
     Deploy-Directory -SourceDir $distDir -RemoteDir $RemoteWebsitePath -Label 'site' -Exclude @('./downloads', './downloads/*')
+    Deploy-Downloads
   }
   'existing' {
     Deploy-Directory -SourceDir $distDir -RemoteDir $RemoteWebsitePath -Label 'site' -Exclude @('./downloads', './downloads/*')
