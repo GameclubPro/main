@@ -1,4 +1,4 @@
-import { Check, KeyRound, LoaderCircle, LockKeyhole, MessageCircle, PenLine, Send, ShieldCheck, Unlink, UserRound } from 'lucide-react';
+import { Check, LoaderCircle, LockKeyhole, MessageCircle, PenLine, Send, ShieldCheck, Unlink, UserRound } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { apiError, apiGet, apiPost, type AuthProvider, type FlexUser } from '../authClient';
 
@@ -41,6 +41,11 @@ function normalizeNicknameInput(value: string): string {
   return value.replace(/[^A-Za-z0-9_]/g, '').slice(0, 16);
 }
 
+function getLauncherDeviceCode(): string {
+  const params = new URLSearchParams(window.location.search);
+  return String(params.get('device') || '').trim();
+}
+
 function ProviderButton({ provider, pending }: { provider: AuthProvider; pending: boolean }) {
   const Icon = providerIcon(provider.id);
 
@@ -65,11 +70,9 @@ function ProviderButton({ provider, pending }: { provider: AuthProvider; pending
 function NicknameForm({
   user,
   onUserChange,
-  compact = false,
 }: {
   user: FlexUser;
   onUserChange: (user: FlexUser) => void;
-  compact?: boolean;
 }) {
   const confirmed = hasConfirmedNickname(user);
   const [nickname, setNickname] = useState(user.nickname || '');
@@ -118,13 +121,13 @@ function NicknameForm({
         3-16 символов: латинские буквы, цифры и _. Без рекламы, мата, 18+, бессмысленных цифр и ников под администрацию.
       </p>
       <button
-        className={confirmed ? 'secondaryCta authButton' : 'primaryCta authButton'}
+        className="primaryCta authButton"
         type="button"
         onClick={submit}
-        disabled={pending || nickname.length < 3 || (confirmed && nickname === user.nickname)}
+        disabled={pending || confirmed || nickname.length < 3}
       >
         {pending ? <LoaderCircle size={18} className="spin" /> : <Check size={18} />}
-        {compact && confirmed ? 'Обновить' : 'Сохранить ник'}
+        Сохранить ник
       </button>
       {message ? <p className="authNote success">{message}</p> : null}
       {error ? <p className="authNote error">{error}</p> : null}
@@ -228,7 +231,7 @@ export function SiteAuthPanel({
           </div>
         </div>
 
-        <NicknameForm user={user} onUserChange={updateUser} compact={compact} />
+        {!hasConfirmedNickname(user) ? <NicknameGate user={user} onUserChange={updateUser} /> : null}
 
         <div className="linkedProviders" aria-label="Подключенные платформы">
           {visibleProviders.map((provider) => {
@@ -278,7 +281,7 @@ export function SiteAuthPanel({
 
 export function LauncherLinkPage() {
   const [user, setUser] = useState<FlexUser | null>(null);
-  const [userCode, setUserCode] = useState(new URLSearchParams(window.location.search).get('code') ?? '');
+  const [deviceCode] = useState(getLauncherDeviceCode);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -296,12 +299,32 @@ export function LauncherLinkPage() {
     void apiGet('/auth/me').then((result) => setUser(result.user ?? null)).catch(() => setUser(null));
   }, []);
 
+  useEffect(() => {
+    if (!user || !hasConfirmedNickname(user) || !deviceCode || pending || message || error) {
+      return;
+    }
+
+    setPending(true);
+    setError('');
+    setMessage('');
+    void apiPost('/launcher/device/approve', { deviceCode })
+      .then(() => {
+        setMessage('Лаунчер подключён. Можно возвращаться в приложение.');
+      })
+      .catch((requestError) => {
+        setError(apiError(requestError));
+      })
+      .finally(() => {
+        setPending(false);
+      });
+  }, [deviceCode, error, message, pending, user]);
+
   const approve = async () => {
     setPending(true);
     setError('');
     setMessage('');
     try {
-      await apiPost('/launcher/device/approve', { userCode });
+      await apiPost('/launcher/device/approve', { deviceCode });
       setMessage('Лаунчер подключён. Можно вернуться в приложение.');
     } catch (requestError) {
       setError(apiError(requestError));
@@ -319,23 +342,45 @@ export function LauncherLinkPage() {
             {user.avatarUrl ? <img src={user.avatarUrl} alt="" /> : <span><ShieldCheck size={20} /></span>}
             <div>
               <strong>{displayName(user)}</strong>
-              <small>{hasConfirmedNickname(user) ? 'Введите код из лаунчера' : 'Сначала сохраните игровой ник'}</small>
+              <small>{hasConfirmedNickname(user) ? 'Лаунчер подключится автоматически' : 'Сначала сохраните игровой ник'}</small>
             </div>
           </div>
-          {!hasConfirmedNickname(user) ? <NicknameForm user={user} onUserChange={setUser} /> : null}
-          <label className="field">
-            <span><KeyRound size={16} /> Код</span>
-            <input value={userCode} maxLength={9} onChange={(event) => setUserCode(event.target.value.toUpperCase())} placeholder="A1B2C3D4" />
-          </label>
-          <button className="primaryCta authButton" type="button" disabled={pending || !hasConfirmedNickname(user) || userCode.replace(/\s+/g, '').length < 8} onClick={approve}>
-            {pending ? <LoaderCircle size={18} className="spin" /> : <Check size={18} />}
-            Подключить
-          </button>
+          {!hasConfirmedNickname(user) ? <NicknameGate user={user} onUserChange={setUser} /> : null}
+          {hasConfirmedNickname(user) && deviceCode ? (
+            <div className="linkStatusBox site">
+              <span>{pending ? <LoaderCircle size={16} className="spin" /> : <Check size={16} />} {message ? 'Готово' : 'Подключаем лаунчер'}</span>
+              <small>{message || 'Оставьте эту вкладку открытой на несколько секунд.'}</small>
+            </div>
+          ) : null}
+          {hasConfirmedNickname(user) && !deviceCode ? <p className="authNote error">Откройте эту страницу из лаунчера.</p> : null}
+          {hasConfirmedNickname(user) && deviceCode && error ? (
+            <button className="primaryCta authButton" type="button" disabled={pending} onClick={approve}>
+              {pending ? <LoaderCircle size={18} className="spin" /> : <Check size={18} />}
+              Повторить
+            </button>
+          ) : null}
           {message ? <p className="authNote success">{message}</p> : null}
           {error ? <p className="authNote error">{error}</p> : null}
         </section>
       ) : null}
     </AuthShell>
+  );
+}
+
+function NicknameGate({ user, onUserChange }: { user: FlexUser; onUserChange: (user: FlexUser) => void }) {
+  return (
+    <div className="nicknameOverlay" role="dialog" aria-modal="true" aria-labelledby="nickname-title">
+      <section className="nicknameModal">
+        <div className="nicknameModalHeader">
+          <span><PenLine size={18} /></span>
+          <div>
+            <h2 id="nickname-title">Придумайте игровой ник</h2>
+            <p>Этот ник будет использоваться на сервере и в лаунчере. После сохранения изменить его нельзя.</p>
+          </div>
+        </div>
+        <NicknameForm user={user} onUserChange={onUserChange} />
+      </section>
+    </div>
   );
 }
 

@@ -1282,6 +1282,59 @@ h2 {
   line-height: 1.45;
 }
 
+.nicknameOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(3, 8, 11, 0.82);
+  backdrop-filter: blur(18px);
+}
+
+.nicknameModal {
+  display: grid;
+  gap: 16px;
+  width: min(430px, 100%);
+  padding: 22px;
+  border: 1px solid rgba(234, 255, 121, 0.28);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.065), rgba(255, 255, 255, 0.025)),
+    #0b1519;
+  box-shadow: 0 24px 82px rgba(0, 0, 0, 0.5);
+}
+
+.nicknameModalHeader {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.nicknameModalHeader > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  color: #071014;
+  background: linear-gradient(135deg, #f1ff8b, #72e06f 64%, #8dd8ff);
+}
+
+.nicknameModalHeader h2 {
+  margin: 0 0 8px;
+  font-size: 1.45rem;
+  line-height: 1.1;
+}
+
+.nicknameModalHeader p {
+  color: #bfccd1;
+  line-height: 1.48;
+}
+
 .authIdentity {
   display: flex;
   align-items: center;
@@ -1801,7 +1854,7 @@ h2 {
   gap: 12px;
 }
 
-.linkCodeBox {
+.linkStatusBox {
   display: grid;
   gap: 8px;
   padding: 14px;
@@ -1810,7 +1863,12 @@ h2 {
   background: rgba(234, 255, 121, 0.08);
 }
 
-.linkCodeBox span {
+.linkStatusBox.site {
+  border-color: rgba(126, 224, 129, 0.26);
+  background: rgba(31, 78, 34, 0.22);
+}
+
+.linkStatusBox span {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -1818,14 +1876,7 @@ h2 {
   font-weight: 850;
 }
 
-.linkCodeBox strong {
-  color: #ffffff;
-  font-family: 'IBM Plex Mono', 'SFMono-Regular', ui-monospace, monospace;
-  font-size: 1.55rem;
-  letter-spacing: 0;
-}
-
-.linkCodeBox small {
+.linkStatusBox small {
   color: #b9c7cc;
   line-height: 1.4;
 }

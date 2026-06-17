@@ -69,7 +69,6 @@ export interface FlexCraftUser {
 
 export interface LauncherDeviceStart {
   deviceCode: string;
-  userCode: string;
   verificationUri: string;
   verificationUriComplete?: string;
   expiresIn: number;
@@ -269,7 +268,6 @@ interface ApiEnvelope<T> {
   status?: LauncherDevicePoll['status'];
   token?: string;
   deviceCode?: string;
-  userCode?: string;
   verificationUri?: string;
   verificationUriComplete?: string;
   expiresIn?: number;
@@ -1517,13 +1515,12 @@ export class LauncherService {
 
   async startLauncherAccountLink(): Promise<LauncherDeviceStart> {
     const response = await fetchApi<ApiEnvelope<LauncherDeviceStart>>('/launcher/device/start', { method: 'POST' });
-    if (!response.deviceCode || !response.userCode || !response.verificationUri) {
-      throw new Error('Сервер авторизации не вернул код входа.');
+    if (!response.deviceCode || !response.verificationUri) {
+      throw new Error('Сервер авторизации не вернул ссылку входа.');
     }
 
     return {
       deviceCode: response.deviceCode,
-      userCode: response.userCode,
       verificationUri: response.verificationUri,
       verificationUriComplete: response.verificationUriComplete,
       expiresIn: Number(response.expiresIn || 600),

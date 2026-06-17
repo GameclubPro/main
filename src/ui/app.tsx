@@ -6,7 +6,6 @@ import {
   FolderOpen,
   Gamepad2,
   HardDrive,
-  KeyRound,
   LoaderCircle,
   LogOut,
   Play,
@@ -229,7 +228,7 @@ function LauncherApp() {
       const link = await window.launcher.startAccountLink();
       setLinkDevice(link);
       await window.launcher.openExternal(link.verificationUriComplete ?? link.verificationUri);
-      setUiMessage(`Открыл сайт FlexCraft. Код подключения: ${link.userCode}`);
+      setUiMessage('Открыл сайт FlexCraft. Войдите там, лаунчер подключится сам.');
     } catch (error) {
       setUiMessage(formatUiError(error));
     } finally {
@@ -406,10 +405,9 @@ function LauncherApp() {
               </button>
 
               {linkDevice ? (
-                <div className="linkCodeBox">
-                  <span><KeyRound size={16} /> Код подключения</span>
-                  <strong>{linkDevice.userCode}</strong>
-                  <small>Подтвердите вход на flex-craft.ru, лаунчер продолжит сам.</small>
+                <div className="linkStatusBox">
+                  <span><LoaderCircle size={16} className="spin" /> Ждём вход на сайте</span>
+                  <small>Если сайт уже открыт и вы вошли, лаунчер подключится автоматически.</small>
                 </div>
               ) : null}
 

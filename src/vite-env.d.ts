@@ -19,7 +19,6 @@ interface AuthSession {
 
 interface LauncherDeviceStart {
   deviceCode: string;
-  userCode: string;
   verificationUri: string;
   verificationUriComplete?: string;
   expiresIn: number;

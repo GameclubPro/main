@@ -798,6 +798,9 @@ app.post('/api/player/nickname', async (request, reply) => {
     if (!user || !userHasProviderIdentity(store, user.id)) {
       return reply.code(401).send({ ok: false, error: 'Сессия устарела. Войдите ещё раз.' });
     }
+    if (user.nicknameSet) {
+      return reply.code(409).send({ ok: false, error: 'Игровой ник уже выбран и больше не меняется.' });
+    }
 
     if (isNicknameTaken(store, validated.nickname, user.id)) {
       return reply.code(409).send({ ok: false, error: 'Этот ник уже занят. Выберите другой.' });
@@ -944,12 +947,10 @@ app.post('/api/auth/logout', async (request, reply) => {
 
 app.post('/api/launcher/device/start', async (request) => {
   const deviceCode = randomToken(32);
-  const userCode = randomBytes(4).toString('hex').toUpperCase();
   await mutateStore(async (store) => {
     store.launcherDevices.push({
       id: randomToken(8),
       deviceCodeHash: sha256(deviceCode),
-      userCodeHash: sha256(userCode),
       status: 'pending',
       userId: null,
       createdAt: nowIso(),
@@ -961,9 +962,8 @@ app.post('/api/launcher/device/start', async (request) => {
   return {
     ok: true,
     deviceCode,
-    userCode,
     verificationUri: `${publicOrigin}/launcher/link`,
-    verificationUriComplete: `${publicOrigin}/launcher/link?code=${encodeURIComponent(userCode)}`,
+    verificationUriComplete: `${publicOrigin}/launcher/link?device=${encodeURIComponent(deviceCode)}`,
     expiresIn: Math.floor(launcherDeviceTtlMs / 1000),
     interval: launcherPollIntervalSeconds,
   };
@@ -978,18 +978,18 @@ app.post('/api/launcher/device/approve', async (request, reply) => {
     return reply.code(409).send({ ok: false, error: 'Сначала выберите игровой ник в профиле сайта.' });
   }
 
-  const userCode = String(request.body?.userCode || '').trim().replace(/\s+/g, '').toUpperCase();
-  if (!/^[A-F0-9]{8}$/.test(userCode)) {
-    return badRequest(reply, 'Введите 8-значный код из лаунчера.');
+  const deviceCode = String(request.body?.deviceCode || '').trim();
+  if (deviceCode.length < 20) {
+    return badRequest(reply, 'Нет подключения лаунчера.');
   }
 
   return mutateStore(async (store) => {
-    const device = store.launcherDevices.find((entry) => entry.userCodeHash === sha256(userCode));
+    const device = store.launcherDevices.find((entry) => entry.deviceCodeHash === sha256(deviceCode));
     if (!device || Date.parse(device.expiresAt) <= Date.now()) {
-      return reply.code(404).send({ ok: false, error: 'Код не найден или устарел.' });
+      return reply.code(404).send({ ok: false, error: 'Подключение лаунчера не найдено или устарело.' });
     }
     if (device.status !== 'pending') {
-      return reply.code(409).send({ ok: false, error: 'Этот код уже использован.' });
+      return reply.code(409).send({ ok: false, error: 'Это подключение уже использовано.' });
     }
 
     device.status = 'approved';

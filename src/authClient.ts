@@ -46,8 +46,8 @@ export interface ApiResult<T = unknown> {
   status?: string;
   token?: string;
   deviceCode?: string;
-  userCode?: string;
   verificationUri?: string;
+  verificationUriComplete?: string;
   expiresIn?: number;
   interval?: number;
   data?: T;
