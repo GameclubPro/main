@@ -401,7 +401,7 @@ function LauncherApp() {
             <section className="authBox">
               <button className="primaryButton fullWidth" type="button" onClick={startAccountLink} disabled={authPending || busy}>
                 {authPending ? <LoaderCircle size={18} className="spin" /> : <ShieldCheck size={18} />}
-                Войти через VK ID
+                Войти на сайте
               </button>
 
               {linkDevice ? (
@@ -411,7 +411,7 @@ function LauncherApp() {
                 </div>
               ) : null}
 
-              <p className="authHint">Аккаунт создаётся через VK ID на сайте. Telegram и MAX подключим следующим шагом.</p>
+              <p className="authHint">Аккаунт создаётся на сайте через VK ID или Telegram. После входа лаунчер подключится автоматически.</p>
             </section>
           ) : null}
         </aside>
@@ -458,7 +458,7 @@ function LauncherApp() {
             </button>
           </div>
 
-          {!snapshot.session ? <p className="quietNotice">Войдите через VK ID, чтобы запустить игру.</p> : null}
+          {!snapshot.session ? <p className="quietNotice">Войдите на сайте, чтобы запустить игру.</p> : null}
           {snapshot.status.warning ? <p className="quietNotice">{snapshot.status.warning}</p> : null}
           {snapshot.status.lastError ? <p className="quietNotice error">{snapshot.status.lastError}</p> : null}
           {uiMessage ? <p className="quietNotice info">{uiMessage}</p> : null}

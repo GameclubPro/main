@@ -1,6 +1,6 @@
 import cookie from '@fastify/cookie';
 import Fastify from 'fastify';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createPublicKey, randomBytes, verify } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
@@ -24,13 +24,23 @@ const vkClientSecret = String(process.env.VK_CLIENT_SECRET || process.env.VK_ID_
 const vkRedirectUri = String(process.env.VK_REDIRECT_URI || `${publicOrigin}/api/auth/vk/callback`).trim();
 const vkBaseUrl = String(process.env.VK_OAUTH_BASE_URL || 'https://id.vk.ru').replace(/\/+$/, '');
 const vkScope = String(process.env.VK_SCOPE || 'vkid.personal_info').trim();
+const telegramClientId = String(process.env.TELEGRAM_CLIENT_ID || '').trim();
+const telegramClientSecret = String(process.env.TELEGRAM_CLIENT_SECRET || '').trim();
+const telegramRedirectUri = String(process.env.TELEGRAM_REDIRECT_URI || `${publicOrigin}/api/auth/telegram/callback`).trim();
+const telegramIssuer = String(process.env.TELEGRAM_OIDC_ISSUER || 'https://oauth.telegram.org').replace(/\/+$/, '');
+const telegramAuthorizeUrl = String(process.env.TELEGRAM_AUTH_URL || `${telegramIssuer}/auth`).trim();
+const telegramTokenUrl = String(process.env.TELEGRAM_TOKEN_URL || `${telegramIssuer}/token`).trim();
+const telegramJwksUrl = String(process.env.TELEGRAM_JWKS_URL || `${telegramIssuer}/.well-known/jwks.json`).trim();
+const telegramScope = String(process.env.TELEGRAM_SCOPE || 'openid profile').trim();
 const gameApiToken = String(process.env.GAME_API_TOKEN || '').trim();
 
 const providerDefinitions = [
   { id: 'vk', label: 'VK ID', enabled: () => Boolean(vkClientId) },
-  { id: 'telegram', label: 'Telegram', enabled: () => false },
+  { id: 'telegram', label: 'Telegram', enabled: () => Boolean(telegramClientId && telegramClientSecret) },
   { id: 'max', label: 'MAX', enabled: () => false },
 ];
+
+let telegramJwksCache = { keys: [], expiresAt: 0 };
 
 if (isProduction && cookieSecret.length < 32) {
   throw new Error('AUTH_COOKIE_SECRET must be at least 32 characters in production.');
@@ -666,6 +676,13 @@ function requireVkConfig(reply) {
   return null;
 }
 
+function requireTelegramConfig(reply) {
+  if (!telegramClientId || !telegramClientSecret) {
+    return reply.code(503).send({ ok: false, error: 'Telegram пока не настроен на сервере.' });
+  }
+  return null;
+}
+
 function redirectWithError(reply, message, returnTo = '/#account') {
   const url = new URL(getSafeReturnPath(returnTo), publicOrigin);
   url.searchParams.set('auth_error', message);
@@ -734,6 +751,128 @@ async function fetchVkProfile(accessToken) {
   };
 }
 
+function decodeJwtPart(value) {
+  return JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
+}
+
+async function fetchTelegramJwks() {
+  if (telegramJwksCache.expiresAt > Date.now() && telegramJwksCache.keys.length > 0) {
+    return telegramJwksCache.keys;
+  }
+
+  const response = await fetch(telegramJwksUrl, {
+    headers: {
+      Accept: 'application/json',
+      'User-Agent': 'flexcraft-auth/1.0',
+    },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !Array.isArray(payload.keys)) {
+    throw new Error(`Telegram JWKS HTTP ${response.status}`);
+  }
+
+  telegramJwksCache = {
+    keys: payload.keys,
+    expiresAt: Date.now() + 1000 * 60 * 60,
+  };
+  return telegramJwksCache.keys;
+}
+
+async function verifyTelegramIdToken(idToken) {
+  const parts = String(idToken || '').split('.');
+  if (parts.length !== 3) {
+    throw new Error('Telegram вернул некорректный id_token.');
+  }
+
+  const header = decodeJwtPart(parts[0]);
+  const payload = decodeJwtPart(parts[1]);
+  if (header.alg !== 'RS256') {
+    throw new Error('Telegram вернул неподдерживаемую подпись id_token.');
+  }
+
+  const keys = await fetchTelegramJwks();
+  const jwk = keys.find((entry) => entry.kid === header.kid) || keys.find((entry) => entry.kty === 'RSA');
+  if (!jwk) {
+    throw new Error('Не найден ключ подписи Telegram.');
+  }
+
+  const publicKey = createPublicKey({ key: jwk, format: 'jwk' });
+  const signed = `${parts[0]}.${parts[1]}`;
+  const signature = Buffer.from(parts[2], 'base64url');
+  const validSignature = verify('RSA-SHA256', Buffer.from(signed), publicKey, signature);
+  if (!validSignature) {
+    telegramJwksCache = { keys: [], expiresAt: 0 };
+    throw new Error('Telegram id_token не прошёл проверку подписи.');
+  }
+
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  if (payload.iss !== telegramIssuer) {
+    throw new Error('Telegram вернул неожиданный issuer.');
+  }
+  const audience = Array.isArray(payload.aud) ? payload.aud.map(String) : [String(payload.aud || '')];
+  if (!audience.includes(telegramClientId)) {
+    throw new Error('Telegram вернул токен для другого приложения.');
+  }
+  if (Number(payload.exp || 0) <= nowSeconds) {
+    throw new Error('Telegram id_token устарел.');
+  }
+  const providerUserId = String(payload.sub || payload.id || '').trim();
+  if (!providerUserId) {
+    throw new Error('Telegram не вернул идентификатор пользователя.');
+  }
+
+  const username = normalizeDisplayName(payload.username || payload.preferred_username || '');
+  const firstName = normalizeDisplayName(payload.given_name || payload.first_name || '');
+  const lastName = normalizeDisplayName(payload.family_name || payload.last_name || '');
+  const displayName = normalizeDisplayName(payload.name || [firstName, lastName].filter(Boolean).join(' ') || username);
+
+  return {
+    provider: 'telegram',
+    providerUserId,
+    first_name: firstName,
+    last_name: lastName,
+    displayName,
+    avatarUrl: String(payload.picture || payload.photo_url || '').trim(),
+    profileUrl: username ? `https://t.me/${username.replace(/^@/, '')}` : '',
+    raw: {
+      sub: providerUserId,
+      username,
+      name: displayName,
+      picture: payload.picture || payload.photo_url || '',
+    },
+  };
+}
+
+async function exchangeTelegramCode({ code, codeVerifier }) {
+  const body = new URLSearchParams({
+    grant_type: 'authorization_code',
+    code,
+    redirect_uri: telegramRedirectUri,
+    client_id: telegramClientId,
+    code_verifier: codeVerifier,
+  });
+  const basicCredentials = Buffer.from(`${telegramClientId}:${telegramClientSecret}`, 'utf8').toString('base64');
+
+  const response = await fetch(telegramTokenUrl, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Basic ${basicCredentials}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': 'flexcraft-auth/1.0',
+    },
+    body,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.error || !payload.id_token) {
+    const details = payload.error_description || payload.error || `Telegram HTTP ${response.status}`;
+    const error = new Error(String(details));
+    error.payload = payload;
+    throw error;
+  }
+  return payload;
+}
+
 app.addHook('onRequest', async (request, reply) => {
   if (request.method === 'OPTIONS') {
     reply
@@ -771,7 +910,7 @@ app.get('/api/player/me', async (request, reply) => {
   const session = await getSessionUser(request);
   if (!session?.user) {
     clearSessionCookie(reply);
-    return reply.code(401).send({ ok: false, error: 'Войдите через VK ID, чтобы открыть профиль игрока.' });
+    return reply.code(401).send({ ok: false, error: 'Войдите через VK ID или Telegram, чтобы открыть профиль игрока.' });
   }
 
   return mutateStore(async (store) => {
@@ -785,7 +924,7 @@ app.post('/api/player/nickname', async (request, reply) => {
   const session = await getSessionUser(request);
   if (!session?.user) {
     clearSessionCookie(reply);
-    return reply.code(401).send({ ok: false, error: 'Войдите через VK ID, чтобы выбрать игровой ник.' });
+    return reply.code(401).send({ ok: false, error: 'Войдите через VK ID или Telegram, чтобы выбрать игровой ник.' });
   }
 
   const validated = validatePlayerNickname(request.body?.nickname);
@@ -931,6 +1070,95 @@ app.get('/api/auth/vk/callback', async (request, reply) => {
       addAudit(nextStore, 'auth.vk_failed', request, { error: error.message });
     });
     return redirectWithError(reply, 'Не удалось войти через VK. Попробуйте ещё раз.', stateEntry.returnTo);
+  }
+});
+
+app.get('/api/auth/telegram/start', async (request, reply) => {
+  const configError = requireTelegramConfig(reply);
+  if (configError) {
+    return configError;
+  }
+
+  const state = randomToken(32);
+  const codeVerifier = randomToken(64);
+  const returnTo = getRequestReturnPath(request);
+  const session = await getSessionUser(request);
+  await mutateStore(async (store) => {
+    store.oauthStates.push({
+      id: randomToken(8),
+      provider: 'telegram',
+      stateHash: sha256(state),
+      codeVerifier,
+      returnTo,
+      linkUserId: session?.user?.id || '',
+      createdAt: nowIso(),
+      expiresAt: isoIn(oauthStateTtlMs),
+    });
+    addAudit(store, 'auth.telegram_start', request, { linkUserId: session?.user?.id || '' });
+  });
+
+  const authorizeUrl = new URL(telegramAuthorizeUrl);
+  authorizeUrl.searchParams.set('response_type', 'code');
+  authorizeUrl.searchParams.set('client_id', telegramClientId);
+  authorizeUrl.searchParams.set('redirect_uri', telegramRedirectUri);
+  authorizeUrl.searchParams.set('scope', telegramScope);
+  authorizeUrl.searchParams.set('state', state);
+  authorizeUrl.searchParams.set('code_challenge', pkceChallenge(codeVerifier));
+  authorizeUrl.searchParams.set('code_challenge_method', 'S256');
+
+  return reply.redirect(authorizeUrl.toString());
+});
+
+app.get('/api/auth/telegram/callback', async (request, reply) => {
+  const configError = requireTelegramConfig(reply);
+  if (configError) {
+    return configError;
+  }
+
+  const code = String(request.query?.code || '').trim();
+  const state = String(request.query?.state || '').trim();
+  const oauthError = String(request.query?.error_description || request.query?.error || '').trim();
+
+  if (oauthError) {
+    return redirectWithError(reply, oauthError);
+  }
+  if (!code || !state) {
+    return redirectWithError(reply, 'Telegram вернул неполный ответ.');
+  }
+
+  const stateHash = sha256(state);
+  const store = await loadStore();
+  cleanupStore(store);
+  const stateEntry = store.oauthStates.find((entry) => entry.provider === 'telegram' && entry.stateHash === stateHash);
+  if (!stateEntry || Date.parse(stateEntry.expiresAt) <= Date.now()) {
+    return redirectWithError(reply, 'Сессия входа Telegram устарела. Попробуйте ещё раз.');
+  }
+
+  try {
+    const tokenResult = await exchangeTelegramCode({
+      code,
+      codeVerifier: stateEntry.codeVerifier,
+    });
+    const profile = await verifyTelegramIdToken(tokenResult.id_token);
+
+    return mutateStore(async (nextStore) => {
+      nextStore.oauthStates = nextStore.oauthStates.filter((entry) => entry.id !== stateEntry.id);
+      const { user, identity } = upsertProviderIdentity(nextStore, profile, stateEntry.linkUserId || '');
+      const sessionToken = await createSession(nextStore, user, { kind: 'web', provider: 'telegram' });
+      addAudit(nextStore, stateEntry.linkUserId ? 'auth.telegram_link' : 'auth.telegram_login', request, {
+        userId: user.id,
+        identityId: identity.id,
+      });
+      setSessionCookie(reply, sessionToken);
+      return reply.redirect(new URL(getSafeReturnPath(stateEntry.returnTo), publicOrigin).toString());
+    });
+  } catch (error) {
+    app.log.warn({ error: error.message, payload: error.payload }, 'Telegram callback failed.');
+    await mutateStore(async (nextStore) => {
+      nextStore.oauthStates = nextStore.oauthStates.filter((entry) => entry.id !== stateEntry.id);
+      addAudit(nextStore, 'auth.telegram_failed', request, { error: error.message });
+    });
+    return redirectWithError(reply, 'Не удалось войти через Telegram. Попробуйте ещё раз.', stateEntry.returnTo);
   }
 });
 

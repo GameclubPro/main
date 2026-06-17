@@ -200,7 +200,7 @@ export function SiteAuthPanel({
     }
     return [
       { id: 'vk', label: 'VK ID', enabled: true },
-      { id: 'telegram', label: 'Telegram', enabled: false },
+      { id: 'telegram', label: 'Telegram', enabled: true },
       { id: 'max', label: 'MAX', enabled: false },
     ];
   }, [providers]);
@@ -395,7 +395,7 @@ function AuthShell({ title, children }: { title: string; children: React.ReactNo
         <section className="authPageIntro">
           <p className="siteEyebrow"><LockKeyhole size={15} /> Аккаунт</p>
           <h1>{title}</h1>
-          <p>Единый профиль FlexCraft для сайта и лаунчера. Сейчас доступен VK ID, дальше сюда добавятся Telegram и MAX.</p>
+          <p>Единый профиль FlexCraft для сайта и лаунчера. Сейчас доступны VK ID и Telegram, дальше сюда добавится MAX.</p>
         </section>
         {children}
       </div>

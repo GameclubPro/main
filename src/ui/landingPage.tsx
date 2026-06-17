@@ -36,8 +36,8 @@ const navItems = [
 const newsItems = [
   {
     icon: Newspaper,
-    title: 'VK ID уже подключен',
-    text: 'Профиль сайта теперь создается через VK ID. Этот же аккаунт используется для привязки лаунчера.',
+    title: 'VK ID и Telegram уже подключены',
+    text: 'Профиль сайта теперь создается через VK ID или Telegram. Этот же аккаунт используется для привязки лаунчера.',
     meta: 'Сегодня',
   },
   {
@@ -73,7 +73,7 @@ const serverCards = [
 
 const quickStart = [
   'Скачай установщик FlexCraft',
-  'Войди на сайте через VK ID',
+  'Войди на сайте через VK ID или Telegram',
   'Открой вход из лаунчера и подтверди профиль на сайте',
   'Нажми Играть, остальное лаунчер сделает сам',
 ];
@@ -170,7 +170,7 @@ export function LandingPage() {
             <p className="siteEyebrow"><Sparkles size={15} /> версия {LAUNCHER_VERSION}</p>
             <h1>FlexCraft</h1>
             <p className="siteLead">
-              Сервер Minecraft с собственным Windows-лаунчером, VK ID профилем и автоматической проверкой обновлений перед игрой.
+              Сервер Minecraft с собственным Windows-лаунчером, социальным профилем и автоматической проверкой обновлений перед игрой.
             </p>
             <div className="siteActions">
               <a className="primaryCta" href={WINDOWS_DOWNLOAD_EXE} download>
