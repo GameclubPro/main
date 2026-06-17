@@ -16,6 +16,10 @@ const providerIcons: Record<string, React.ElementType> = {
 
 interface SiteAuthPanelProps {
   compact?: boolean;
+  userOverride?: FlexUser | null;
+  providersOverride?: AuthProvider[];
+  onUserChange?: (user: FlexUser | null) => void;
+  onProvidersChange?: (providers: AuthProvider[]) => void;
 }
 
 function currentReturnPath(): string {
@@ -60,12 +64,36 @@ function ProviderButton({ provider, pending }: { provider: AuthProvider; pending
   );
 }
 
-export function SiteAuthPanel({ compact = false }: SiteAuthPanelProps) {
-  const [user, setUser] = useState<FlexUser | null>(null);
-  const [providers, setProviders] = useState<AuthProvider[]>([]);
+export function SiteAuthPanel({
+  compact = false,
+  userOverride,
+  providersOverride,
+  onUserChange,
+  onProvidersChange,
+}: SiteAuthPanelProps) {
+  const controlledUser = userOverride !== undefined;
+  const controlledProviders = providersOverride !== undefined;
+  const [localUser, setLocalUser] = useState<FlexUser | null>(null);
+  const [localProviders, setLocalProviders] = useState<AuthProvider[]>([]);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const user = controlledUser ? userOverride ?? null : localUser;
+  const providers = controlledProviders ? providersOverride ?? [] : localProviders;
+
+  const updateUser = (nextUser: FlexUser | null) => {
+    if (!controlledUser) {
+      setLocalUser(nextUser);
+    }
+    onUserChange?.(nextUser);
+  };
+
+  const updateProviders = (nextProviders: AuthProvider[]) => {
+    if (!controlledProviders) {
+      setLocalProviders(nextProviders);
+    }
+    onProvidersChange?.(nextProviders);
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -81,8 +109,8 @@ export function SiteAuthPanel({ compact = false }: SiteAuthPanelProps) {
     void apiGet('/auth/me')
       .then((result) => {
         if (mounted) {
-          setUser(result.user ?? null);
-          setProviders(result.providers ?? []);
+          updateUser(result.user ?? null);
+          updateProviders(result.providers ?? []);
         }
       })
       .catch((requestError) => {
@@ -111,7 +139,7 @@ export function SiteAuthPanel({ compact = false }: SiteAuthPanelProps) {
     setError('');
     try {
       await apiPost('/auth/logout');
-      setUser(null);
+      updateUser(null);
       setMessage('Вы вышли из аккаунта.');
     } catch (requestError) {
       setError(apiError(requestError));
