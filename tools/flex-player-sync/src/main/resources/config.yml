@@ -1,0 +1,7 @@
+api-url: "https://flex-craft.ru/api/game/player/snapshot"
+api-token: ""
+sync-interval-seconds: 120
+sync-on-join-delay-seconds: 4
+connect-timeout-seconds: 6
+request-timeout-seconds: 12
+debug: false

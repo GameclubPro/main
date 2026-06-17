@@ -1,0 +1,14 @@
+name: FlexPlayerSync
+version: 1.0.0
+main: ru.flexcraft.playersync.FlexPlayerSyncPlugin
+api-version: '1.21'
+description: Sends FlexCraft player snapshots to the website backend.
+commands:
+  flexsync:
+    description: Manage FlexCraft player sync.
+    usage: /flexsync [reload|push]
+    aliases: [fsync]
+permissions:
+  flex.playersync.admin:
+    description: Allows managing FlexCraft player sync.
+    default: op

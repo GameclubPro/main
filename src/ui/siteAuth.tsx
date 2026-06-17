@@ -1,12 +1,6 @@
-import { Check, KeyRound, LoaderCircle, LockKeyhole, MessageCircle, Send, ShieldCheck, Unlink, UserRound } from 'lucide-react';
+import { Check, KeyRound, LoaderCircle, LockKeyhole, MessageCircle, PenLine, Send, ShieldCheck, Unlink, UserRound } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { apiError, apiGet, apiPost, type AuthProvider, type FlexUser } from '../authClient';
-
-const providerLabels: Record<string, string> = {
-  vk: 'VK ID',
-  telegram: 'Telegram',
-  max: 'MAX',
-};
 
 const providerIcons: Record<string, React.ElementType> = {
   vk: MessageCircle,
@@ -31,16 +25,20 @@ function providerLoginUrl(provider: string): string {
   return `/api/auth/${provider}/start?${params.toString()}`;
 }
 
-function providerLabel(provider: string): string {
-  return providerLabels[provider] ?? provider;
-}
-
 function displayName(user: FlexUser): string {
   return user.displayName || user.nickname || user.login;
 }
 
 function providerIcon(provider: string) {
   return providerIcons[provider] ?? ShieldCheck;
+}
+
+function hasConfirmedNickname(user: FlexUser | null): boolean {
+  return Boolean(user?.nicknameSet || user?.player?.nicknameSet);
+}
+
+function normalizeNicknameInput(value: string): string {
+  return value.replace(/[^A-Za-z0-9_]/g, '').slice(0, 16);
 }
 
 function ProviderButton({ provider, pending }: { provider: AuthProvider; pending: boolean }) {
@@ -61,6 +59,76 @@ function ProviderButton({ provider, pending }: { provider: AuthProvider; pending
       {pending ? <LoaderCircle size={18} className="spin" /> : <Icon size={18} />}
       <span>Войти через {provider.label}</span>
     </a>
+  );
+}
+
+function NicknameForm({
+  user,
+  onUserChange,
+  compact = false,
+}: {
+  user: FlexUser;
+  onUserChange: (user: FlexUser) => void;
+  compact?: boolean;
+}) {
+  const confirmed = hasConfirmedNickname(user);
+  const [nickname, setNickname] = useState(user.nickname || '');
+  const [pending, setPending] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    setNickname(user.nickname || '');
+  }, [user.nickname]);
+
+  const submit = async () => {
+    setPending(true);
+    setMessage('');
+    setError('');
+    try {
+      const result = await apiPost('/player/nickname', { nickname });
+      if (result.user) {
+        onUserChange(result.user);
+      }
+      setMessage('Игровой ник сохранён.');
+    } catch (requestError) {
+      setError(apiError(requestError));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <div className={confirmed ? 'nicknameBox' : 'nicknameBox required'}>
+      <div className="nicknameHeader">
+        <span><PenLine size={16} /> Игровой ник</span>
+        <small>{confirmed ? 'готово' : 'обязательно'}</small>
+      </div>
+      <label className="field nicknameField">
+        <input
+          value={nickname}
+          minLength={3}
+          maxLength={16}
+          onChange={(event) => setNickname(normalizeNicknameInput(event.target.value))}
+          placeholder="Player_123"
+          autoComplete="nickname"
+        />
+      </label>
+      <p className="nicknameRules">
+        3-16 символов: латинские буквы, цифры и _. Без рекламы, мата, 18+, бессмысленных цифр и ников под администрацию.
+      </p>
+      <button
+        className={confirmed ? 'secondaryCta authButton' : 'primaryCta authButton'}
+        type="button"
+        onClick={submit}
+        disabled={pending || nickname.length < 3 || (confirmed && nickname === user.nickname)}
+      >
+        {pending ? <LoaderCircle size={18} className="spin" /> : <Check size={18} />}
+        {compact && confirmed ? 'Обновить' : 'Сохранить ник'}
+      </button>
+      {message ? <p className="authNote success">{message}</p> : null}
+      {error ? <p className="authNote error">{error}</p> : null}
+    </div>
   );
 }
 
@@ -156,9 +224,11 @@ export function SiteAuthPanel({
           {user.avatarUrl ? <img src={user.avatarUrl} alt="" /> : <span><UserRound size={20} /></span>}
           <div>
             <strong>{displayName(user)}</strong>
-            <small>{linkedProviders.size > 0 ? `Вход: ${[...linkedProviders].map(providerLabel).join(', ')}` : user.login}</small>
+            <small>{hasConfirmedNickname(user) ? user.nickname : 'Выберите игровой ник'}</small>
           </div>
         </div>
+
+        <NicknameForm user={user} onUserChange={updateUser} compact={compact} />
 
         <div className="linkedProviders" aria-label="Подключенные платформы">
           {visibleProviders.map((provider) => {
@@ -249,14 +319,15 @@ export function LauncherLinkPage() {
             {user.avatarUrl ? <img src={user.avatarUrl} alt="" /> : <span><ShieldCheck size={20} /></span>}
             <div>
               <strong>{displayName(user)}</strong>
-              <small>Введите код из лаунчера</small>
+              <small>{hasConfirmedNickname(user) ? 'Введите код из лаунчера' : 'Сначала сохраните игровой ник'}</small>
             </div>
           </div>
+          {!hasConfirmedNickname(user) ? <NicknameForm user={user} onUserChange={setUser} /> : null}
           <label className="field">
             <span><KeyRound size={16} /> Код</span>
             <input value={userCode} maxLength={9} onChange={(event) => setUserCode(event.target.value.toUpperCase())} placeholder="A1B2C3D4" />
           </label>
-          <button className="primaryCta authButton" type="button" disabled={pending || userCode.replace(/\s+/g, '').length < 8} onClick={approve}>
+          <button className="primaryCta authButton" type="button" disabled={pending || !hasConfirmedNickname(user) || userCode.replace(/\s+/g, '').length < 8} onClick={approve}>
             {pending ? <LoaderCircle size={18} className="spin" /> : <Check size={18} />}
             Подключить
           </button>

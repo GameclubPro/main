@@ -108,6 +108,7 @@ VK_CLIENT_SECRET=
 VK_REDIRECT_URI=https://flex-craft.ru/api/auth/vk/callback
 VK_OAUTH_BASE_URL=https://id.vk.ru
 VK_SCOPE=vkid.personal_info
+GAME_API_TOKEN=
 EOF
   chmod 600 /etc/flexcraft-auth.env
 fi
@@ -116,6 +117,7 @@ grep -q '^VK_CLIENT_SECRET=' /etc/flexcraft-auth.env || echo 'VK_CLIENT_SECRET='
 grep -q '^VK_REDIRECT_URI=' /etc/flexcraft-auth.env || echo 'VK_REDIRECT_URI=https://flex-craft.ru/api/auth/vk/callback' >>/etc/flexcraft-auth.env
 grep -q '^VK_OAUTH_BASE_URL=' /etc/flexcraft-auth.env || echo 'VK_OAUTH_BASE_URL=https://id.vk.ru' >>/etc/flexcraft-auth.env
 grep -q '^VK_SCOPE=' /etc/flexcraft-auth.env || echo 'VK_SCOPE=vkid.personal_info' >>/etc/flexcraft-auth.env
+grep -q '^GAME_API_TOKEN=' /etc/flexcraft-auth.env || echo 'GAME_API_TOKEN=' >>/etc/flexcraft-auth.env
 cat >/etc/systemd/system/flexcraft-auth.service <<'EOF'
 [Unit]
 Description=FlexCraft Auth API

@@ -2,11 +2,24 @@ export interface FlexUser {
   id: string;
   login: string;
   nickname: string;
+  nicknameSet?: boolean;
   displayName?: string;
   avatarUrl?: string;
   linkedProviders?: string[];
   identities?: FlexIdentity[];
+  player?: FlexPlayer | null;
   createdAt: string;
+}
+
+export interface FlexPlayer {
+  id: string;
+  userId: string;
+  nickname: string;
+  nicknameSet: boolean;
+  stats?: Record<string, unknown>;
+  lastSeenAt?: string;
+  updatedAt?: string;
+  createdAt?: string;
 }
 
 export interface FlexIdentity {

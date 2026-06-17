@@ -14,7 +14,7 @@ const dataDir = process.env.AUTH_DATA_DIR || path.join(process.cwd(), 'data');
 const dataPath = path.join(dataDir, 'auth-store.json');
 const cookieName = process.env.AUTH_SESSION_COOKIE || 'flexcraft_session';
 const cookieSecret = process.env.AUTH_COOKIE_SECRET || '';
-const maxJsonBytes = 64 * 1024;
+const maxJsonBytes = 256 * 1024;
 const sessionMaxAgeSeconds = 60 * 60 * 24 * 30;
 const launcherDeviceTtlMs = 1000 * 60 * 10;
 const launcherPollIntervalSeconds = 3;
@@ -24,6 +24,7 @@ const vkClientSecret = String(process.env.VK_CLIENT_SECRET || process.env.VK_ID_
 const vkRedirectUri = String(process.env.VK_REDIRECT_URI || `${publicOrigin}/api/auth/vk/callback`).trim();
 const vkBaseUrl = String(process.env.VK_OAUTH_BASE_URL || 'https://id.vk.ru').replace(/\/+$/, '');
 const vkScope = String(process.env.VK_SCOPE || 'vkid.personal_info').trim();
+const gameApiToken = String(process.env.GAME_API_TOKEN || '').trim();
 
 const providerDefinitions = [
   { id: 'vk', label: 'VK ID', enabled: () => Boolean(vkClientId) },
@@ -72,6 +73,85 @@ function pkceChallenge(verifier) {
 
 function normalizeNickname(value) {
   return String(value || '').trim().replace(/[^A-Za-z0-9_]/g, '').slice(0, 16);
+}
+
+const reservedNicknameParts = [
+  'admin',
+  'administrator',
+  'moder',
+  'moderator',
+  'helper',
+  'server',
+  'tester',
+  'operator',
+  'support',
+  'staff',
+  'owner',
+  'flexcraft',
+  'flex_craft',
+  'minecraft',
+  'mojang',
+  'vk',
+  'telegram',
+  'max',
+];
+
+const forbiddenNicknameParts = [
+  'fuck',
+  'shit',
+  'bitch',
+  'dick',
+  'sex',
+  'porn',
+  'nazi',
+  'hitler',
+  'drug',
+  'nark',
+  'server',
+  'discord',
+  'vk_com',
+  't_me',
+  'http',
+  'www',
+];
+
+function validatePlayerNickname(value) {
+  const nickname = String(value || '').trim();
+  const lowerNickname = nickname.toLowerCase();
+
+  if (nickname.length < 3) {
+    return { error: 'Ник должен быть от 3 до 16 символов.' };
+  }
+
+  if (nickname.length > 16) {
+    return { error: 'Ник должен быть не длиннее 16 символов.' };
+  }
+
+  if (!/^[A-Za-z0-9_]+$/.test(nickname)) {
+    return { error: 'Используйте только латинские буквы, цифры и подчёркивание.' };
+  }
+
+  if (/^\d+$/.test(nickname)) {
+    return { error: 'Ник не может состоять только из цифр.' };
+  }
+
+  if (/__{3,}/.test(nickname)) {
+    return { error: 'В нике не должно быть длинной цепочки подчёркиваний.' };
+  }
+
+  if (/(.)\1{5,}/i.test(nickname)) {
+    return { error: 'Ник выглядит как бессмысленный набор повторяющихся символов.' };
+  }
+
+  if (reservedNicknameParts.some((part) => lowerNickname.includes(part))) {
+    return { error: 'Ник не должен быть похож на команду проекта или технический аккаунт.' };
+  }
+
+  if (forbiddenNicknameParts.some((part) => lowerNickname.includes(part))) {
+    return { error: 'Ник не должен содержать рекламу, грубые или запрещённые слова.' };
+  }
+
+  return { nickname };
 }
 
 function normalizeDisplayName(value) {
@@ -130,7 +210,10 @@ function createNicknameCandidate(profile, providerUserId) {
 
 function uniqueNickname(store, preferred, providerUserId) {
   const base = normalizeNickname(preferred) || 'FlexCraft';
-  const used = new Set(store.users.map((user) => String(user.nickname || '').toLowerCase()));
+  const used = new Set([
+    ...store.users.map((user) => String(user.nickname || '').toLowerCase()),
+    ...(store.players || []).map((player) => String(player.nickname || '').toLowerCase()),
+  ]);
 
   if (base.length >= 3 && !used.has(base.toLowerCase())) {
     return base;
@@ -169,6 +252,98 @@ function userHasProviderIdentity(store, userId) {
   return store.identities.some((identity) => identity.userId === userId);
 }
 
+function findPlayerByUserId(store, userId) {
+  return store.players?.find((player) => player.userId === userId) || null;
+}
+
+function ensurePlayerProfile(store, user) {
+  if (!Array.isArray(store.players)) {
+    store.players = [];
+  }
+
+  let player = findPlayerByUserId(store, user.id);
+  const now = nowIso();
+  if (!player) {
+    player = {
+      id: randomToken(12),
+      userId: user.id,
+      nickname: user.nickname || '',
+      nicknameSet: Boolean(user.nicknameSet),
+      inventory: null,
+      stats: {},
+      lastSeenAt: '',
+      createdAt: now,
+      updatedAt: now,
+    };
+    store.players.push(player);
+  }
+
+  player.nickname = user.nickname || player.nickname || '';
+  player.nicknameSet = Boolean(user.nicknameSet);
+  player.updatedAt = player.updatedAt || now;
+  player.inventory = player.inventory ?? null;
+  player.stats = player.stats && typeof player.stats === 'object' ? player.stats : {};
+  player.lastSeenAt = player.lastSeenAt || '';
+  return player;
+}
+
+function publicPlayer(player, includeGameData = false) {
+  if (!player) {
+    return null;
+  }
+
+  const result = {
+    id: player.id,
+    userId: player.userId,
+    nickname: player.nickname || '',
+    nicknameSet: Boolean(player.nicknameSet),
+    stats: player.stats || {},
+    lastSeenAt: player.lastSeenAt || '',
+    updatedAt: player.updatedAt,
+    createdAt: player.createdAt,
+  };
+
+  if (includeGameData) {
+    result.inventory = player.inventory ?? null;
+    result.enderChest = player.enderChest ?? null;
+    result.equipment = player.equipment ?? null;
+    result.location = player.location ?? null;
+    result.minecraftUuid = player.minecraftUuid || '';
+  }
+
+  return result;
+}
+
+function isNicknameTaken(store, nickname, userId) {
+  const lowerNickname = nickname.toLowerCase();
+  return (
+    store.users.some((entry) => entry.id !== userId && String(entry.nickname || '').toLowerCase() === lowerNickname)
+    || (store.players || []).some((entry) => entry.userId !== userId && String(entry.nickname || '').toLowerCase() === lowerNickname)
+  );
+}
+
+function setPlayerNickname(store, user, nickname) {
+  const now = nowIso();
+  user.nickname = nickname;
+  user.nicknameSet = true;
+  user.updatedAt = now;
+
+  const player = ensurePlayerProfile(store, user);
+  player.nickname = nickname;
+  player.nicknameSet = true;
+  player.updatedAt = now;
+  return player;
+}
+
+function getPlayerByNickname(store, nickname) {
+  const lowerNickname = String(nickname || '').trim().toLowerCase();
+  if (!lowerNickname) {
+    return null;
+  }
+
+  return (store.players || []).find((player) => String(player.nickname || '').toLowerCase() === lowerNickname) || null;
+}
+
 function upsertProviderIdentity(store, profile, linkedUserId = '') {
   const providerUserId = String(profile.providerUserId || '').trim();
   if (!providerUserId) {
@@ -190,6 +365,9 @@ function upsertProviderIdentity(store, profile, linkedUserId = '') {
   if (!user) {
     if (linkedUser) {
       user = linkedUser;
+      if (typeof user.nicknameSet !== 'boolean') {
+        user.nicknameSet = Boolean(user.nicknameSet);
+      }
     } else {
       const userId = randomToken(16);
       const nickname = uniqueNickname(store, createNicknameCandidate(profile, providerUserId), `${profile.provider}:${providerUserId}`);
@@ -197,6 +375,7 @@ function upsertProviderIdentity(store, profile, linkedUserId = '') {
         id: userId,
         login: getProviderLogin(userId),
         nickname,
+        nicknameSet: false,
         displayName,
         avatarUrl: profile.avatarUrl || '',
         authSource: profile.provider,
@@ -226,10 +405,12 @@ function upsertProviderIdentity(store, profile, linkedUserId = '') {
 
   user.displayName = user.displayName || displayName;
   user.avatarUrl = user.avatarUrl || profile.avatarUrl || '';
+  user.nicknameSet = Boolean(user.nicknameSet);
   user.lastLoginAt = now;
   user.updatedAt = now;
+  const player = ensurePlayerProfile(store, user);
 
-  return { user, identity };
+  return { user, identity, player };
 }
 
 function publicIdentity(identity) {
@@ -246,14 +427,17 @@ function publicIdentity(identity) {
 
 function publicUser(user, store = null) {
   const identities = store?.identities?.filter((identity) => identity.userId === user.id).map(publicIdentity) || [];
+  const player = store ? findPlayerByUserId(store, user.id) : null;
   return {
     id: user.id,
     login: user.login,
     nickname: user.nickname,
+    nicknameSet: Boolean(user.nicknameSet),
     displayName: user.displayName || user.nickname,
     avatarUrl: user.avatarUrl || identities.find((identity) => identity.avatarUrl)?.avatarUrl || '',
     linkedProviders: identities.map((identity) => identity.provider),
     identities,
+    player: publicPlayer(player),
     createdAt: user.createdAt,
   };
 }
@@ -263,6 +447,7 @@ function createEmptyStore() {
     version: 2,
     users: [],
     identities: [],
+    players: [],
     sessions: [],
     oauthStates: [],
     launcherDevices: [],
@@ -279,6 +464,7 @@ async function loadStore() {
       ...parsed,
       users: Array.isArray(parsed.users) ? parsed.users : [],
       identities: Array.isArray(parsed.identities) ? parsed.identities : [],
+      players: Array.isArray(parsed.players) ? parsed.players : [],
       sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
       oauthStates: Array.isArray(parsed.oauthStates) ? parsed.oauthStates : [],
       launcherDevices: Array.isArray(parsed.launcherDevices) ? parsed.launcherDevices : [],
@@ -402,6 +588,77 @@ function badRequest(reply, message) {
   return reply.code(400).send({ ok: false, error: message });
 }
 
+function getBearerToken(request) {
+  return String(request.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+}
+
+function jsonSize(value) {
+  try {
+    return Buffer.byteLength(JSON.stringify(value), 'utf8');
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+function safeGamePayload(value, fallback) {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+
+  if (jsonSize(value) > 96 * 1024) {
+    return fallback;
+  }
+
+  return value;
+}
+
+function normalizeGameStats(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  const stats = {};
+  for (const [key, rawValue] of Object.entries(value).slice(0, 80)) {
+    const safeKey = String(key).replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 48);
+    if (!safeKey) {
+      continue;
+    }
+
+    if (typeof rawValue === 'number' && Number.isFinite(rawValue)) {
+      stats[safeKey] = rawValue;
+    } else if (typeof rawValue === 'string') {
+      stats[safeKey] = rawValue.slice(0, 160);
+    } else if (typeof rawValue === 'boolean') {
+      stats[safeKey] = rawValue;
+    }
+  }
+  return stats;
+}
+
+function updatePlayerSnapshot(store, player, snapshot) {
+  const now = nowIso();
+  const minecraftUuid = String(snapshot.minecraftUuid || snapshot.uuid || '').trim().slice(0, 80);
+  player.minecraftUuid = minecraftUuid || player.minecraftUuid || '';
+  player.inventory = safeGamePayload(snapshot.inventory, player.inventory ?? null);
+  player.enderChest = safeGamePayload(snapshot.enderChest, player.enderChest ?? null);
+  player.equipment = safeGamePayload(snapshot.equipment, player.equipment ?? null);
+  player.location = safeGamePayload(snapshot.location, player.location ?? null);
+  player.stats = {
+    ...(player.stats && typeof player.stats === 'object' ? player.stats : {}),
+    ...normalizeGameStats(snapshot.stats),
+    online: Boolean(snapshot.online),
+  };
+  player.lastSeenAt = now;
+  player.updatedAt = now;
+
+  const user = player.userId ? store.users.find((entry) => entry.id === player.userId) : null;
+  if (user) {
+    user.lastSeenAt = now;
+    user.updatedAt = now;
+  }
+  return player;
+}
+
 function requireVkConfig(reply) {
   if (!vkClientId) {
     return reply.code(503).send({ ok: false, error: 'VK ID пока не настроен на сервере.' });
@@ -508,6 +765,74 @@ app.get('/api/auth/me', async (request, reply) => {
   cleanupStore(store);
   const user = store.users.find((entry) => entry.id === session.user.id) || session.user;
   return { ok: true, user: publicUser(user, store), providers: getProviderStatus() };
+});
+
+app.get('/api/player/me', async (request, reply) => {
+  const session = await getSessionUser(request);
+  if (!session?.user) {
+    clearSessionCookie(reply);
+    return reply.code(401).send({ ok: false, error: 'Войдите через VK ID, чтобы открыть профиль игрока.' });
+  }
+
+  return mutateStore(async (store) => {
+    const user = store.users.find((entry) => entry.id === session.user.id) || session.user;
+    const player = ensurePlayerProfile(store, user);
+    return reply.send({ ok: true, user: publicUser(user, store), player: publicPlayer(player, true) });
+  });
+});
+
+app.post('/api/player/nickname', async (request, reply) => {
+  const session = await getSessionUser(request);
+  if (!session?.user) {
+    clearSessionCookie(reply);
+    return reply.code(401).send({ ok: false, error: 'Войдите через VK ID, чтобы выбрать игровой ник.' });
+  }
+
+  const validated = validatePlayerNickname(request.body?.nickname);
+  if (validated.error) {
+    return badRequest(reply, validated.error);
+  }
+
+  return mutateStore(async (store) => {
+    const user = store.users.find((entry) => entry.id === session.user.id);
+    if (!user || !userHasProviderIdentity(store, user.id)) {
+      return reply.code(401).send({ ok: false, error: 'Сессия устарела. Войдите ещё раз.' });
+    }
+
+    if (isNicknameTaken(store, validated.nickname, user.id)) {
+      return reply.code(409).send({ ok: false, error: 'Этот ник уже занят. Выберите другой.' });
+    }
+
+    const player = setPlayerNickname(store, user, validated.nickname);
+    addAudit(store, 'player.nickname_update', request, { userId: user.id, nickname: validated.nickname });
+    return reply.send({ ok: true, user: publicUser(user, store), player: publicPlayer(player, true) });
+  });
+});
+
+app.post('/api/game/player/snapshot', async (request, reply) => {
+  if (!gameApiToken) {
+    return reply.code(503).send({ ok: false, error: 'GAME_API_TOKEN не настроен на сервере.' });
+  }
+
+  if (getBearerToken(request) !== gameApiToken) {
+    return reply.code(401).send({ ok: false, error: 'Неверный токен игрового сервера.' });
+  }
+
+  const validated = validatePlayerNickname(request.body?.nickname);
+  if (validated.error) {
+    return badRequest(reply, validated.error);
+  }
+
+  return mutateStore(async (store) => {
+    const player = getPlayerByNickname(store, validated.nickname);
+    if (!player || !player.nicknameSet) {
+      return reply.code(404).send({ ok: false, error: 'Игрок с таким ником не найден в базе сайта.' });
+    }
+
+    updatePlayerSnapshot(store, player, request.body || {});
+    addAudit(store, 'game.player_snapshot', request, { userId: player.userId, nickname: player.nickname });
+    return reply.send({ ok: true, player: publicPlayer(player, true) });
+  });
 });
 
 app.get('/api/auth/vk/start', async (request, reply) => {
@@ -649,6 +974,9 @@ app.post('/api/launcher/device/approve', async (request, reply) => {
   if (!session?.user) {
     return reply.code(401).send({ ok: false, error: 'Войдите на сайте, чтобы подключить лаунчер.' });
   }
+  if (!session.user.nicknameSet) {
+    return reply.code(409).send({ ok: false, error: 'Сначала выберите игровой ник в профиле сайта.' });
+  }
 
   const userCode = String(request.body?.userCode || '').trim().replace(/\s+/g, '').toUpperCase();
   if (!/^[A-F0-9]{8}$/.test(userCode)) {
@@ -694,6 +1022,9 @@ app.post('/api/launcher/device/poll', async (request, reply) => {
     if (!user || !userHasProviderIdentity(store, user.id)) {
       return reply.code(400).send({ ok: false, status: 'denied', error: 'Пользователь не найден.' });
     }
+    if (!user.nicknameSet) {
+      return reply.code(409).send({ ok: false, status: 'denied', error: 'Сначала выберите игровой ник на сайте.' });
+    }
 
     const launcherToken = await createSession(store, user, { kind: 'launcher' });
     device.status = 'used';
@@ -715,6 +1046,9 @@ app.post('/api/launcher/session/me', async (request, reply) => {
   const user = session ? store.users.find((entry) => entry.id === session.userId) : null;
   if (!user || !userHasProviderIdentity(store, user.id)) {
     return reply.code(401).send({ ok: false, error: 'Сессия лаунчера истекла.' });
+  }
+  if (!user.nicknameSet) {
+    return reply.code(409).send({ ok: false, error: 'Сначала выберите игровой ник на сайте.' });
   }
 
   return { ok: true, user: publicUser(user, store) };

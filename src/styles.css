@@ -1234,6 +1234,54 @@ h2 {
   color: rgba(7, 16, 20, 0.72);
 }
 
+.nicknameBox {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.nicknameBox.required {
+  border-color: rgba(234, 255, 121, 0.34);
+  background: rgba(234, 255, 121, 0.08);
+}
+
+.nicknameHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.nicknameHeader span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #ffffff;
+  font-weight: 900;
+}
+
+.nicknameHeader small {
+  color: #eaff79;
+  font-size: 0.76rem;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.nicknameField input {
+  min-height: 44px;
+  font-family: 'IBM Plex Mono', 'SFMono-Regular', ui-monospace, monospace;
+  font-weight: 850;
+}
+
+.nicknameRules {
+  color: #bfccd1;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
 .authIdentity {
   display: flex;
   align-items: center;
