@@ -17,6 +17,20 @@ const DEFAULT_RELEASE_VERSION = `fabric-loader-${FABRIC_LOADER_VERSION}-${BASE_M
 const DEFAULT_SERVER_ADDRESS = 'flex-craft.ru:25565';
 const LEGACY_LOCAL_SERVER_ADDRESSES = new Set(['127.0.0.1', '127.0.0.1:25565', 'localhost', 'localhost:25565']);
 const DEFAULT_SERVER_NAME = 'FlexCraft';
+const DEFAULT_MINECRAFT_OPTIONS: Record<string, string> = {
+  lang: 'ru_ru',
+  narrator: '0',
+  narratorHotkey: 'false',
+  onboardAccessibility: 'false',
+  skipMultiplayerWarning: 'true',
+  skipRealms32bitWarning: 'true',
+  telemetryOptInExtra: 'false',
+  tutorialStep: 'none',
+};
+const DEFAULT_MINECRAFT_KEY_OPTIONS: Record<string, string> = {
+  'key_gui.xaero_open_map': 'key.keyboard.m',
+  'key_gui.xaero_pac_key_open_menu': 'key.keyboard.p',
+};
 const BUNDLED_CLIENT_MODS_DIR = 'client-mods';
 const BUNDLED_MODPACK_META_FILE = '.craftgate-client-mods.json';
 const REMOTE_CLIENT_MODS_BASE_URLS = [
@@ -24,7 +38,6 @@ const REMOTE_CLIENT_MODS_BASE_URLS = [
   'https://www.flex-craft.ru/client-mods',
 ] as const;
 const AUTH_API_BASE_URL = 'https://flex-craft.ru/api';
-const QUICK_PLAY_PATH = 'quickPlay/log.json';
 const LOG_RETENTION = 160;
 const USER_AGENT = `flexcraft-launcher/0.1 (${process.platform}; ${process.arch})`;
 const REQUIRED_JAVA_MAJOR_VERSION = 25;
@@ -424,6 +437,35 @@ function sanitizeServerAddress(raw: unknown): string {
   return address;
 }
 
+function splitServerAddress(serverAddress: string): { host: string; port: string } | null {
+  const address = serverAddress.trim();
+
+  if (!address) {
+    return null;
+  }
+
+  const defaultPort = '25565';
+  const ipv6Match = address.match(/^\[([^\]]+)](?::(\d{1,5}))?$/);
+  if (ipv6Match) {
+    return { host: ipv6Match[1], port: normalizeServerPort(ipv6Match[2] ?? defaultPort) };
+  }
+
+  const lastColonIndex = address.lastIndexOf(':');
+  if (lastColonIndex > 0 && address.indexOf(':') === lastColonIndex) {
+    return {
+      host: address.slice(0, lastColonIndex),
+      port: normalizeServerPort(address.slice(lastColonIndex + 1) || defaultPort),
+    };
+  }
+
+  return { host: address, port: defaultPort };
+}
+
+function normalizeServerPort(rawPort: string): string {
+  const port = Number(rawPort);
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? String(port) : '25565';
+}
+
 function sanitizeUsername(raw: unknown): string {
   const cleaned = coerceString(raw).trim().replace(/[^A-Za-z0-9_]/g, '').slice(0, 16);
   return cleaned || 'FlexCraft';
@@ -753,6 +795,26 @@ async function pathExists(targetPath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function parseMinecraftOptions(content: string): Map<string, string> {
+  const options = new Map<string, string>();
+
+  for (const line of content.split(/\r?\n/)) {
+    const separatorIndex = line.indexOf(':');
+
+    if (separatorIndex <= 0) {
+      continue;
+    }
+
+    options.set(line.slice(0, separatorIndex), line.slice(separatorIndex + 1));
+  }
+
+  return options;
+}
+
+function serializeMinecraftOptions(options: Map<string, string>): string {
+  return `${[...options.entries()].map(([key, value]) => `${key}:${value}`).join('\n')}\n`;
 }
 
 async function fileIsRegularFile(targetPath: string): Promise<boolean> {
@@ -1578,6 +1640,8 @@ export class LauncherService {
       this.config.preferredVersion = versionId;
       this.status.versionId = versionId;
       await writeJsonFile(this.paths.configPath, this.config);
+      await this.syncServerList();
+      await this.syncMinecraftOptions();
       await this.ensureInstallation(versionId);
       await this.refreshStatus();
       this.pushLog(`Клиент FlexCraft ${versionId} готов.`);
@@ -1596,6 +1660,7 @@ export class LauncherService {
       this.status.versionId = versionId;
       await writeJsonFile(this.paths.configPath, this.config);
       await this.syncServerList();
+      await this.syncMinecraftOptions();
       const installState = await this.ensureInstallation(versionId);
       await this.launchClient(installState);
       await this.refreshStatus();
@@ -1628,6 +1693,26 @@ export class LauncherService {
 
     await ensureDirectory(this.paths.gameDir);
     await writeFile(path.join(this.paths.gameDir, 'servers.dat'), createServersDat(DEFAULT_SERVER_NAME, serverAddress));
+  }
+
+  private async syncMinecraftOptions(): Promise<void> {
+    const optionsPath = path.join(this.paths.gameDir, 'options.txt');
+    const options = (await pathExists(optionsPath))
+      ? parseMinecraftOptions(await readFile(optionsPath, 'utf8').catch(() => ''))
+      : new Map<string, string>();
+
+    for (const [key, value] of Object.entries(DEFAULT_MINECRAFT_OPTIONS)) {
+      options.set(key, value);
+    }
+
+    for (const [key, value] of Object.entries(DEFAULT_MINECRAFT_KEY_OPTIONS)) {
+      if (!options.has(key)) {
+        options.set(key, value);
+      }
+    }
+
+    await ensureDirectory(this.paths.gameDir);
+    await writeFile(optionsPath, serializeMinecraftOptions(options), 'utf8');
   }
 
   private async syncClientMods(): Promise<void> {
@@ -2071,7 +2156,6 @@ export class LauncherService {
     await ensureDirectory(path.join(this.paths.assetsDir, 'objects'));
     await ensureDirectory(path.join(this.paths.assetsDir, 'log_configs'));
     await ensureDirectory(this.paths.nativesDir);
-    await ensureDirectory(path.join(this.paths.gameDir, 'quickPlay'));
 
     await writeJsonFile(versionJsonPath, versionFile);
     await downloadFile(
@@ -2300,8 +2384,7 @@ export class LauncherService {
       versionJarPath,
     ];
 
-    const quickPlayPath = path.join(this.paths.gameDir, QUICK_PLAY_PATH);
-    await ensureDirectory(path.dirname(quickPlayPath));
+    const serverTarget = splitServerAddress(this.config.serverAddress);
 
     const variables: Record<string, string> = {
       auth_player_name: username,
@@ -2318,15 +2401,15 @@ export class LauncherService {
       launcher_version: this.launcherVersion,
       classpath: classpathEntries.join(path.delimiter),
       natives_directory: nativeRoot,
-      quickPlayPath,
-      quickPlayMultiplayer: this.config.serverAddress.trim(),
+      quickPlayPath: '',
+      quickPlayMultiplayer: '',
       resolution_width: '1280',
       resolution_height: '720',
     };
 
     const features: Record<string, boolean> = {
-      has_quick_plays_support: Boolean(this.config.serverAddress.trim()),
-      is_quick_play_multiplayer: Boolean(this.config.serverAddress.trim()),
+      has_quick_plays_support: false,
+      is_quick_play_multiplayer: false,
     };
 
     const defaultJvmArgs = expandArguments(context.version.arguments?.['default-user-jvm'], variables, features).filter(
@@ -2336,6 +2419,9 @@ export class LauncherService {
       (argument) => !isMemoryArgument(argument),
     );
     const gameArgs = expandArguments(context.version.arguments?.game, variables, features);
+    if (serverTarget) {
+      gameArgs.push('--server', serverTarget.host, '--port', serverTarget.port);
+    }
     const normalizedJvmArgs = normalizeJvmArguments([
       ...defaultJvmArgs,
       ...(loggingArgument ? [loggingArgument] : []),

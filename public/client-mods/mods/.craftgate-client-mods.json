@@ -21,6 +21,14 @@
       "sha1": "2bc17bb4275cc70a12e4ac35d139a71a30845720"
     },
     {
+      "slug": "flexcraft-ru-lang",
+      "title": "FlexCraft Russian Language Pack",
+      "version": "1.0.0",
+      "file": "flexcraft-ru-lang-1.0.0.jar",
+      "size": 8399,
+      "sha1": "a1fa1e93c6925e84679fbe72b210d6c5255a93b4"
+    },
+    {
       "slug": "forge-config-api-port",
       "title": "Forge Config API Port",
       "version": "26.1.5",

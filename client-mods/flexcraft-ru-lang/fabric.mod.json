@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "flexcraft_ru_lang",
+  "version": "1.0.0",
+  "name": "FlexCraft Russian Language Pack",
+  "description": "Russian UI text for FlexCraft map and claim tools.",
+  "authors": [
+    "FlexCraft"
+  ],
+  "environment": "client",
+  "depends": {
+    "fabricloader": ">=0.14",
+    "minecraft": ">=26.1.2 <26.2.0"
+  }
+}
